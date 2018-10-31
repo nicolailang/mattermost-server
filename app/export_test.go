@@ -10,7 +10,7 @@ import (
 )
 
 func TestReactionsOfPost(t *testing.T) {
-	th := Setup()
+	th := Setup(t)
 	defer th.TearDown()
 	th.InitBasic()
 
@@ -36,7 +36,7 @@ func TestReactionsOfPost(t *testing.T) {
 
 func TestExportUserNotifyProps(t *testing.T) {
 
-	th := Setup()
+	th := Setup(t)
 	defer th.TearDown()
 	th.InitBasic()
 
