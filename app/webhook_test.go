@@ -18,8 +18,9 @@ import (
 )
 
 func TestCreateIncomingWebhookForChannel(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup()
 	defer th.TearDown()
+	th.InitBasic()
 
 	type TestCase struct {
 		EnableIncomingHooks        bool
@@ -149,8 +150,9 @@ func TestCreateIncomingWebhookForChannel(t *testing.T) {
 }
 
 func TestUpdateIncomingWebhook(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup()
 	defer th.TearDown()
+	th.InitBasic()
 
 	type TestCase struct {
 		EnableIncomingHooks        bool
@@ -287,8 +289,9 @@ func TestUpdateIncomingWebhook(t *testing.T) {
 }
 
 func TestCreateWebhookPost(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup()
 	defer th.TearDown()
+	th.InitBasic()
 
 	th.App.UpdateConfig(func(cfg *model.Config) { cfg.ServiceSettings.EnableIncomingWebhooks = true })
 
@@ -476,8 +479,9 @@ func TestSplitWebhookPost(t *testing.T) {
 }
 
 func TestCreateOutGoingWebhookWithUsernameAndIconURL(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup()
 	defer th.TearDown()
+	th.InitBasic()
 
 	outgoingWebhook := model.OutgoingWebhook{
 		ChannelId:    th.BasicChannel.Id,
@@ -595,8 +599,9 @@ func TestTriggerOutGoingWebhookWithUsernameAndIconURL(t *testing.T) {
 		return testCasesOutgoing
 	}
 
-	th := Setup().InitBasic()
+	th := Setup()
 	defer th.TearDown()
+	th.InitBasic()
 
 	th.App.UpdateConfig(func(cfg *model.Config) {
 		*cfg.ServiceSettings.AllowedUntrustedInternalConnections = "localhost 127.0.0.1"

@@ -10,8 +10,9 @@ import (
 )
 
 func TestReactionsOfPost(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup()
 	defer th.TearDown()
+	th.InitBasic()
 
 	post := th.BasicPost
 	post.HasReactions = true
@@ -35,8 +36,9 @@ func TestReactionsOfPost(t *testing.T) {
 
 func TestExportUserNotifyProps(t *testing.T) {
 
-	th := Setup().InitBasic()
+	th := Setup()
 	defer th.TearDown()
+	th.InitBasic()
 
 	userNotifyProps := model.StringMap{
 		model.DESKTOP_NOTIFY_PROP:            model.USER_NOTIFY_ALL,
