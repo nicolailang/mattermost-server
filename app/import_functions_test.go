@@ -1769,7 +1769,7 @@ func TestImportImportPost(t *testing.T) {
 }
 
 func TestImportImportDirectChannel(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	// Check how many channels are in the database.
@@ -1967,7 +1967,7 @@ func TestImportImportDirectChannel(t *testing.T) {
 }
 
 func TestImportImportDirectPost(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	// Create the DIRECT channel.

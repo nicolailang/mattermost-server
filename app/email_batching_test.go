@@ -94,7 +94,7 @@ func TestHandleNewNotifications(t *testing.T) {
 }
 
 func TestCheckPendingNotifications(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	job := NewEmailBatchingJob(th.App, 128)
@@ -202,7 +202,7 @@ func TestCheckPendingNotifications(t *testing.T) {
  * Ensures that email batch interval defaults to 15 minutes for users that haven't explicitly set this preference
  */
 func TestCheckPendingNotificationsDefaultInterval(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	job := NewEmailBatchingJob(th.App, 128)
@@ -240,7 +240,7 @@ func TestCheckPendingNotificationsDefaultInterval(t *testing.T) {
  * Ensures that email batch interval defaults to 15 minutes if user preference is invalid
  */
 func TestCheckPendingNotificationsCantParseInterval(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	job := NewEmailBatchingJob(th.App, 128)

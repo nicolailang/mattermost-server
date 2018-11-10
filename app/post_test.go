@@ -22,7 +22,7 @@ import (
 )
 
 func TestUpdatePostEditAt(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	post := &model.Post{}
@@ -50,7 +50,7 @@ func TestUpdatePostEditAt(t *testing.T) {
 }
 
 func TestUpdatePostTimeLimit(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	post := &model.Post{}
@@ -89,7 +89,7 @@ func TestUpdatePostTimeLimit(t *testing.T) {
 func TestPostReplyToPostWhereRootPosterLeftChannel(t *testing.T) {
 	// This test ensures that when replying to a root post made by a user who has since left the channel, the reply
 	// post completes successfully. This is a regression test for PLT-6523.
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	channel := th.BasicChannel
@@ -121,7 +121,7 @@ func TestPostReplyToPostWhereRootPosterLeftChannel(t *testing.T) {
 }
 
 func TestPostAction(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	th.App.UpdateConfig(func(cfg *model.Config) {
@@ -361,7 +361,7 @@ func TestPostAction(t *testing.T) {
 }
 
 func TestPostChannelMentions(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	channel := th.BasicChannel
@@ -408,7 +408,7 @@ func TestPostChannelMentions(t *testing.T) {
 }
 
 func TestImageProxy(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	th.App.UpdateConfig(func(cfg *model.Config) {

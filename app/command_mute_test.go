@@ -13,7 +13,7 @@ import (
 )
 
 func TestMuteCommandNoChannel(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	if testing.Short() {
@@ -40,7 +40,7 @@ func TestMuteCommandNoChannel(t *testing.T) {
 }
 
 func TestMuteCommandNoArgs(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	channel1 := th.BasicChannel
@@ -70,7 +70,7 @@ func TestMuteCommandNoArgs(t *testing.T) {
 }
 
 func TestMuteCommandSpecificChannel(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	if testing.Short() {
@@ -117,7 +117,7 @@ func TestMuteCommandSpecificChannel(t *testing.T) {
 }
 
 func TestMuteCommandNotMember(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	if testing.Short() {
@@ -145,7 +145,7 @@ func TestMuteCommandNotMember(t *testing.T) {
 }
 
 func TestMuteCommandNotChannel(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	if testing.Short() {
@@ -166,7 +166,7 @@ func TestMuteCommandNotChannel(t *testing.T) {
 }
 
 func TestMuteCommandDMChannel(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	if testing.Short() {

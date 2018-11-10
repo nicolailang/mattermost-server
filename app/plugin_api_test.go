@@ -41,7 +41,7 @@ func setupPluginApiTest(t *testing.T, pluginCode string, pluginManifest string, 
 }
 
 func TestPluginAPIUpdateUserStatus(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 	api := th.SetupPluginAPI()
 
@@ -60,7 +60,7 @@ func TestPluginAPIUpdateUserStatus(t *testing.T) {
 }
 
 func TestPluginAPILoadPluginConfiguration(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	var pluginJson map[string]interface{}
@@ -131,7 +131,7 @@ func TestPluginAPILoadPluginConfiguration(t *testing.T) {
 }
 
 func TestPluginAPILoadPluginConfigurationDefaults(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	var pluginJson map[string]interface{}
@@ -205,7 +205,7 @@ func TestPluginAPILoadPluginConfigurationDefaults(t *testing.T) {
 }
 
 func TestPluginAPIGetProfileImage(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 	api := th.SetupPluginAPI()
 
@@ -221,7 +221,7 @@ func TestPluginAPIGetProfileImage(t *testing.T) {
 }
 
 func TestPluginAPIGetPlugins(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 	api := th.SetupPluginAPI()
 

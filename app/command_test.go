@@ -12,7 +12,7 @@ import (
 )
 
 func TestMoveCommand(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	sourceTeam := th.CreateTeam()
@@ -47,7 +47,7 @@ func TestMoveCommand(t *testing.T) {
 }
 
 func TestCreateCommandPost(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	post := &model.Post{

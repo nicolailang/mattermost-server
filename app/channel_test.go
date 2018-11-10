@@ -14,7 +14,7 @@ import (
 )
 
 func TestPermanentDeleteChannel(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	th.App.UpdateConfig(func(cfg *model.Config) {
@@ -69,7 +69,7 @@ func TestPermanentDeleteChannel(t *testing.T) {
 }
 
 func TestMoveChannel(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	sourceTeam := th.CreateTeam()
@@ -140,7 +140,7 @@ func TestMoveChannel(t *testing.T) {
 }
 
 func TestJoinDefaultChannelsCreatesChannelMemberHistoryRecordTownSquare(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	// figure out the initial number of users in town square
@@ -166,7 +166,7 @@ func TestJoinDefaultChannelsCreatesChannelMemberHistoryRecordTownSquare(t *testi
 }
 
 func TestJoinDefaultChannelsCreatesChannelMemberHistoryRecordOffTopic(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	// figure out the initial number of users in off-topic
@@ -192,7 +192,7 @@ func TestJoinDefaultChannelsCreatesChannelMemberHistoryRecordOffTopic(t *testing
 }
 
 func TestJoinDefaultChannelsExperimentalDefaultChannels(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	basicChannel2 := th.CreateChannel(th.BasicTeam)
@@ -222,7 +222,7 @@ func TestJoinDefaultChannelsExperimentalDefaultChannels(t *testing.T) {
 }
 
 func TestCreateChannelPublicCreatesChannelMemberHistoryRecord(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	// creates a public channel and adds basic user to it
@@ -236,7 +236,7 @@ func TestCreateChannelPublicCreatesChannelMemberHistoryRecord(t *testing.T) {
 }
 
 func TestCreateChannelPrivateCreatesChannelMemberHistoryRecord(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	// creates a private channel and adds basic user to it
@@ -250,7 +250,7 @@ func TestCreateChannelPrivateCreatesChannelMemberHistoryRecord(t *testing.T) {
 }
 
 func TestUpdateChannelPrivacy(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	privateChannel := th.createChannel(th.BasicTeam, model.CHANNEL_PRIVATE)
@@ -265,7 +265,7 @@ func TestUpdateChannelPrivacy(t *testing.T) {
 }
 
 func TestCreateGroupChannelCreatesChannelMemberHistoryRecord(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	user1 := th.CreateUser()
@@ -293,7 +293,7 @@ func TestCreateGroupChannelCreatesChannelMemberHistoryRecord(t *testing.T) {
 }
 
 func TestCreateDirectChannelCreatesChannelMemberHistoryRecord(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	user1 := th.CreateUser()
@@ -320,7 +320,7 @@ func TestCreateDirectChannelCreatesChannelMemberHistoryRecord(t *testing.T) {
 }
 
 func TestGetDirectChannelCreatesChannelMemberHistoryRecord(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	user1 := th.CreateUser()
@@ -348,7 +348,7 @@ func TestGetDirectChannelCreatesChannelMemberHistoryRecord(t *testing.T) {
 }
 
 func TestAddUserToChannelCreatesChannelMemberHistoryRecord(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	// create a user and add it to a channel
@@ -378,7 +378,7 @@ func TestAddUserToChannelCreatesChannelMemberHistoryRecord(t *testing.T) {
 }
 
 func TestRemoveUserFromChannelUpdatesChannelMemberHistoryRecord(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	// a user creates a channel
@@ -401,7 +401,7 @@ func TestRemoveUserFromChannelUpdatesChannelMemberHistoryRecord(t *testing.T) {
 }
 
 func TestAddChannelMemberNoUserRequestor(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	// create a user and add it to a channel
@@ -442,7 +442,7 @@ func TestAddChannelMemberNoUserRequestor(t *testing.T) {
 }
 
 func TestAppUpdateChannelScheme(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	channel := th.BasicChannel
@@ -460,7 +460,7 @@ func TestAppUpdateChannelScheme(t *testing.T) {
 }
 
 func TestFillInChannelProps(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	channelPublic1, err := th.App.CreateChannel(&model.Channel{DisplayName: "Public 1", Name: "public1", Type: model.CHANNEL_OPEN, TeamId: th.BasicTeam.Id}, false)
@@ -665,7 +665,7 @@ func TestFillInChannelProps(t *testing.T) {
 }
 
 func TestRenameChannel(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	testCases := []struct {

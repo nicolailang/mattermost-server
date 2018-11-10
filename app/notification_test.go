@@ -13,7 +13,7 @@ import (
 )
 
 func TestSendNotifications(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	th.App.AddUserToChannel(th.BasicUser2, th.BasicChannel)

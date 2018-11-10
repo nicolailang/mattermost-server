@@ -10,7 +10,7 @@ import (
 )
 
 func TestReactionsOfPost(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	post := th.BasicPost
@@ -35,7 +35,7 @@ func TestReactionsOfPost(t *testing.T) {
 
 func TestExportUserNotifyProps(t *testing.T) {
 
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	userNotifyProps := model.StringMap{
@@ -62,7 +62,7 @@ func TestExportUserNotifyProps(t *testing.T) {
 }
 
 func TestExportUserChannels(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 	channel := th.BasicChannel
 	user := th.BasicUser

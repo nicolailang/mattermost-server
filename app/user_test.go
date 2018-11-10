@@ -22,7 +22,7 @@ import (
 )
 
 func TestIsUsernameTaken(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	user := th.BasicUser
@@ -43,7 +43,7 @@ func TestIsUsernameTaken(t *testing.T) {
 }
 
 func TestCheckUserDomain(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	user := th.BasicUser
@@ -71,7 +71,7 @@ func TestCheckUserDomain(t *testing.T) {
 }
 
 func TestCreateOAuthUser(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	r := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -117,7 +117,7 @@ func TestCreateProfileImage(t *testing.T) {
 }
 
 func TestSetDefaultProfileImage(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	err := th.App.SetDefaultProfileImage(&model.User{
@@ -432,7 +432,7 @@ func TestGetUsersByStatus(t *testing.T) {
 }
 
 func TestCreateUserWithToken(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	user := model.User{Email: strings.ToLower(model.NewId()) + "success+test@example.com", Nickname: "Darth Vader", Username: "vader" + model.NewId(), Password: "passwd1", AuthService: ""}
@@ -502,7 +502,7 @@ func TestCreateUserWithToken(t *testing.T) {
 }
 
 func TestPermanentDeleteUser(t *testing.T) {
-	th := Setup().InitBasic()
+	th := Setup().InitBasic().InitSystemAdmin()
 	defer th.TearDown()
 
 	b := []byte("testimage")
