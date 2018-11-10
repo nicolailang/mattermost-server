@@ -152,8 +152,17 @@ func Setup() *TestHelper {
 }
 
 func (me *TestHelper) InitBasic() *TestHelper {
+	var err *model.AppError
+
 	me.BasicTeam = me.CreateTeam()
 	me.BasicUser = me.CreateUser()
+
+	// TODO: Fix this madness.
+	me.BasicUser, err = me.App.UpdateUserRoles(me.BasicUser.Id, model.SYSTEM_USER_ROLE_ID, false)
+	if err != nil {
+		panic("failed to drop system admin role for basic user: " + err.Error())
+	}
+
 	me.LinkUserToTeam(me.BasicUser, me.BasicTeam)
 	me.BasicUser2 = me.CreateUser()
 	me.LinkUserToTeam(me.BasicUser2, me.BasicTeam)
