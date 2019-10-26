@@ -112,6 +112,24 @@ func (o *FileInfo) IsImage() bool {
 	return strings.HasPrefix(o.MimeType, "image")
 }
 
+func NewInfo(name string) *FileInfo {
+	info := &FileInfo{
+		Name: name,
+	}
+
+	extension := strings.ToLower(filepath.Ext(name))
+	info.MimeType = mime.TypeByExtension(extension)
+
+	if extension != "" && extension[0] == '.' {
+		// The client expects a file extension without the leading period
+		info.Extension = extension[1:]
+	} else {
+		info.Extension = extension
+	}
+
+	return info
+}
+
 func GetInfoForBytes(name string, data []byte) (*FileInfo, *AppError) {
 	info := &FileInfo{
 		Name: name,
@@ -140,7 +158,7 @@ func GetInfoForBytes(name string, data []byte) (*FileInfo, *AppError) {
 				if gifConfig, err := gif.DecodeAll(bytes.NewReader(data)); err != nil {
 					// Still return the rest of the info even though it doesn't appear to be an actual gif
 					info.HasPreviewImage = true
-					err = NewAppError("GetInfoForBytes", "model.file_info.get.gif.app_error", nil, "name="+name, http.StatusBadRequest)
+					return info, NewAppError("GetInfoForBytes", "model.file_info.get.gif.app_error", nil, "name="+name, http.StatusBadRequest)
 				} else {
 					info.HasPreviewImage = len(gifConfig.Image) == 1
 				}

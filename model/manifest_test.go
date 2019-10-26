@@ -64,6 +64,9 @@ func TestFindManifest(t *testing.T) {
 func TestManifestUnmarshal(t *testing.T) {
 	expected := Manifest{
 		Id:               "theid",
+		HomepageURL:      "https://example.com",
+		SupportURL:       "https://example.com/support",
+		IconPath:         "assets/icon.svg",
 		MinServerVersion: "5.6.0",
 		Server: &ManifestServer{
 			Executable: "theexecutable",
@@ -102,6 +105,9 @@ func TestManifestUnmarshal(t *testing.T) {
 	var yamlResult Manifest
 	require.NoError(t, yaml.Unmarshal([]byte(`
 id: theid
+homepage_url: https://example.com
+support_url: https://example.com/support
+icon_path: assets/icon.svg
 min_server_version: 5.6.0
 server:
     executable: theexecutable
@@ -131,7 +137,10 @@ settings_schema:
 	var jsonResult Manifest
 	require.NoError(t, json.Unmarshal([]byte(`{
 	"id": "theid",
-  "min_server_version": "5.6.0",
+	"homepage_url": "https://example.com",
+	"support_url": "https://example.com/support",
+	"icon_path": "assets/icon.svg",
+	"min_server_version": "5.6.0",
 	"server": {
 		"executable": "theexecutable",
 		"executables": {
@@ -186,14 +195,19 @@ func TestFindManifest_FileErrors(t *testing.T) {
 }
 
 func TestFindManifest_FolderPermission(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("skipping test while running as root: can't effectively remove permissions")
+	}
+
 	for _, tc := range []string{"plugin.yaml", "plugin.json"} {
 		dir, err := ioutil.TempDir("", "mm-plugin-test")
+		require.NoError(t, err)
 		defer os.RemoveAll(dir)
 
 		path := filepath.Join(dir, tc)
 		require.NoError(t, os.Mkdir(path, 0700))
 
-		//User does not have permission in the plugin folder
+		// User does not have permission in the plugin folder
 		err = os.Chmod(dir, 0066)
 		require.NoError(t, err)
 
@@ -202,7 +216,6 @@ func TestFindManifest_FolderPermission(t *testing.T) {
 		assert.Equal(t, "", mpath)
 		assert.Error(t, err, tc)
 		assert.False(t, os.IsNotExist(err), tc)
-
 	}
 }
 

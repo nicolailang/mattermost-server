@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/mattermost/mattermost-server/model"
-	"github.com/mattermost/mattermost-server/plugin"
 )
 
 type PluginCommand struct {
@@ -91,23 +90,36 @@ func (a *App) PluginCommandsForTeam(teamId string) []*model.Command {
 	return commands
 }
 
-func (a *App) ExecutePluginCommand(args *model.CommandArgs) (*model.Command, *model.CommandResponse, *model.AppError) {
+// tryExecutePluginCommand attempts to run a command provided by a plugin based on the given arguments. If no such
+// command can be found, returns nil for all arguments.
+func (a *App) tryExecutePluginCommand(args *model.CommandArgs) (*model.Command, *model.CommandResponse, *model.AppError) {
 	parts := strings.Split(args.Command, " ")
 	trigger := parts[0][1:]
 	trigger = strings.ToLower(trigger)
 
+	var matched *PluginCommand
 	a.Srv.pluginCommandsLock.RLock()
-	defer a.Srv.pluginCommandsLock.RUnlock()
-
 	for _, pc := range a.Srv.pluginCommands {
 		if (pc.Command.TeamId == "" || pc.Command.TeamId == args.TeamId) && pc.Command.Trigger == trigger {
-			pluginHooks, err := a.Srv.Plugins.HooksForPlugin(pc.PluginId)
-			if err != nil {
-				return pc.Command, nil, model.NewAppError("ExecutePluginCommand", "model.plugin_command.error.app_error", nil, "err="+err.Error(), http.StatusInternalServerError)
-			}
-			response, appErr := pluginHooks.ExecuteCommand(&plugin.Context{}, args)
-			return pc.Command, response, appErr
+			matched = pc
+			break
 		}
 	}
-	return nil, nil, nil
+	a.Srv.pluginCommandsLock.RUnlock()
+	if matched == nil {
+		return nil, nil, nil
+	}
+
+	pluginsEnvironment := a.GetPluginsEnvironment()
+	if pluginsEnvironment == nil {
+		return nil, nil, nil
+	}
+
+	pluginHooks, err := pluginsEnvironment.HooksForPlugin(matched.PluginId)
+	if err != nil {
+		return matched.Command, nil, model.NewAppError("ExecutePluginCommand", "model.plugin_command.error.app_error", nil, "err="+err.Error(), http.StatusInternalServerError)
+	}
+
+	response, appErr := pluginHooks.ExecuteCommand(a.PluginContext(), args)
+	return matched.Command, response, appErr
 }

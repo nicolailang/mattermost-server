@@ -4,7 +4,9 @@
 package plugin
 
 import (
-	"github.com/hashicorp/go-plugin"
+	"io"
+
+	plugin "github.com/hashicorp/go-plugin"
 	"github.com/mattermost/mattermost-server/model"
 )
 
@@ -16,42 +18,105 @@ import (
 type API interface {
 	// LoadPluginConfiguration loads the plugin's configuration. dest should be a pointer to a
 	// struct that the configuration JSON can be unmarshalled to.
+	//
+	// Minimum server version: 5.2
 	LoadPluginConfiguration(dest interface{}) error
 
 	// RegisterCommand registers a custom slash command. When the command is triggered, your plugin
 	// can fulfill it via the ExecuteCommand hook.
+	//
+	// Minimum server version: 5.2
 	RegisterCommand(command *model.Command) error
 
 	// UnregisterCommand unregisters a command previously registered via RegisterCommand.
+	//
+	// Minimum server version: 5.2
 	UnregisterCommand(teamId, trigger string) error
 
 	// GetSession returns the session object for the Session ID
+	//
+	// Minimum server version: 5.2
 	GetSession(sessionId string) (*model.Session, *model.AppError)
 
 	// GetConfig fetches the currently persisted config
+	//
+	// Minimum server version: 5.2
 	GetConfig() *model.Config
 
+	// GetUnsanitizedConfig fetches the currently persisted config without removing secrets.
+	//
+	// Minimum server version: 5.16
+	GetUnsanitizedConfig() *model.Config
+
 	// SaveConfig sets the given config and persists the changes
+	//
+	// Minimum server version: 5.2
 	SaveConfig(config *model.Config) *model.AppError
+
+	// GetPluginConfig fetches the currently persisted config of plugin
+	//
+	// Minimum server version: 5.6
+	GetPluginConfig() map[string]interface{}
+
+	// SavePluginConfig sets the given config for plugin and persists the changes
+	//
+	// Minimum server version: 5.6
+	SavePluginConfig(config map[string]interface{}) *model.AppError
+
+	// GetBundlePath returns the absolute path where the plugin's bundle was unpacked.
+	//
+	// Minimum server version: 5.10
+	GetBundlePath() (string, error)
+
+	// GetLicense returns the current license used by the Mattermost server. Returns nil if the
+	// the server does not have a license.
+	//
+	// Minimum server version: 5.10
+	GetLicense() *model.License
 
 	// GetServerVersion return the current Mattermost server version
 	//
 	// Minimum server version: 5.4
 	GetServerVersion() string
 
+	// GetSystemInstallDate returns the time that Mattermost was first installed and ran.
+	//
+	// Minimum server version: 5.10
+	GetSystemInstallDate() (int64, *model.AppError)
+
+	// GetDiagnosticId returns a unique identifier used by the server for diagnostic reports.
+	//
+	// Minimum server version: 5.10
+	GetDiagnosticId() string
+
 	// CreateUser creates a user.
+	//
+	// Minimum server version: 5.2
 	CreateUser(user *model.User) (*model.User, *model.AppError)
 
 	// DeleteUser deletes a user.
+	//
+	// Minimum server version: 5.2
 	DeleteUser(userId string) *model.AppError
 
+	// GetUsers a list of users based on search options.
+	//
+	// Minimum server version: 5.10
+	GetUsers(options *model.UserGetOptions) ([]*model.User, *model.AppError)
+
 	// GetUser gets a user.
+	//
+	// Minimum server version: 5.2
 	GetUser(userId string) (*model.User, *model.AppError)
 
 	// GetUserByEmail gets a user by their email address.
+	//
+	// Minimum server version: 5.2
 	GetUserByEmail(email string) (*model.User, *model.AppError)
 
 	// GetUserByUsername gets a user by their username.
+	//
+	// Minimum server version: 5.2
 	GetUserByUsername(name string) (*model.User, *model.AppError)
 
 	// GetUsersByUsernames gets users by their usernames.
@@ -64,18 +129,46 @@ type API interface {
 	// Minimum server version: 5.6
 	GetUsersInTeam(teamId string, page int, perPage int) ([]*model.User, *model.AppError)
 
+	// GetTeamIcon gets the team icon.
+	//
+	// Minimum server version: 5.6
+	GetTeamIcon(teamId string) ([]byte, *model.AppError)
+
+	// SetTeamIcon sets the team icon.
+	//
+	// Minimum server version: 5.6
+	SetTeamIcon(teamId string, data []byte) *model.AppError
+
+	// RemoveTeamIcon removes the team icon.
+	//
+	// Minimum server version: 5.6
+	RemoveTeamIcon(teamId string) *model.AppError
+
 	// UpdateUser updates a user.
+	//
+	// Minimum server version: 5.2
 	UpdateUser(user *model.User) (*model.User, *model.AppError)
 
 	// GetUserStatus will get a user's status.
+	//
+	// Minimum server version: 5.2
 	GetUserStatus(userId string) (*model.Status, *model.AppError)
 
 	// GetUserStatusesByIds will return a list of user statuses based on the provided slice of user IDs.
+	//
+	// Minimum server version: 5.2
 	GetUserStatusesByIds(userIds []string) ([]*model.Status, *model.AppError)
 
 	// UpdateUserStatus will set a user's status until the user, or another integration/plugin, sets it back to online.
 	// The status parameter can be: "online", "away", "dnd", or "offline".
+	//
+	// Minimum server version: 5.2
 	UpdateUserStatus(userId, status string) (*model.Status, *model.AppError)
+
+	// UpdateUserActive deactivates or reactivates an user.
+	//
+	// Minimum server version: 5.8
+	UpdateUserActive(userId string, active bool) *model.AppError
 
 	// GetUsersInChannel returns a page of users in a channel. Page counting starts at 0.
 	// The sortBy parameter can be: "username" or "status".
@@ -92,18 +185,28 @@ type API interface {
 	GetLDAPUserAttributes(userId string, attributes []string) (map[string]string, *model.AppError)
 
 	// CreateTeam creates a team.
+	//
+	// Minimum server version: 5.2
 	CreateTeam(team *model.Team) (*model.Team, *model.AppError)
 
 	// DeleteTeam deletes a team.
+	//
+	// Minimum server version: 5.2
 	DeleteTeam(teamId string) *model.AppError
 
 	// GetTeam gets all teams.
+	//
+	// Minimum server version: 5.2
 	GetTeams() ([]*model.Team, *model.AppError)
 
 	// GetTeam gets a team.
+	//
+	// Minimum server version: 5.2
 	GetTeam(teamId string) (*model.Team, *model.AppError)
 
 	// GetTeamByName gets a team by its name.
+	//
+	// Minimum server version: 5.2
 	GetTeamByName(name string) (*model.Team, *model.AppError)
 
 	// GetTeamsUnreadForUser gets the unread message and mention counts for each team to which the given user belongs.
@@ -112,7 +215,14 @@ type API interface {
 	GetTeamsUnreadForUser(userId string) ([]*model.TeamUnread, *model.AppError)
 
 	// UpdateTeam updates a team.
+	//
+	// Minimum server version: 5.2
 	UpdateTeam(team *model.Team) (*model.Team, *model.AppError)
+
+	// SearchTeams search a team.
+	//
+	// Minimum server version: 5.8
+	SearchTeams(term string) ([]*model.Team, *model.AppError)
 
 	// GetTeamsForUser returns list of teams of given user ID.
 	//
@@ -120,45 +230,74 @@ type API interface {
 	GetTeamsForUser(userId string) ([]*model.Team, *model.AppError)
 
 	// CreateTeamMember creates a team membership.
+	//
+	// Minimum server version: 5.2
 	CreateTeamMember(teamId, userId string) (*model.TeamMember, *model.AppError)
 
 	// CreateTeamMember creates a team membership for all provided user ids.
+	//
+	// Minimum server version: 5.2
 	CreateTeamMembers(teamId string, userIds []string, requestorId string) ([]*model.TeamMember, *model.AppError)
 
 	// DeleteTeamMember deletes a team membership.
+	//
+	// Minimum server version: 5.2
 	DeleteTeamMember(teamId, userId, requestorId string) *model.AppError
 
 	// GetTeamMembers returns the memberships of a specific team.
-	GetTeamMembers(teamId string, offset, limit int) ([]*model.TeamMember, *model.AppError)
+	//
+	// Minimum server version: 5.2
+	GetTeamMembers(teamId string, page, perPage int) ([]*model.TeamMember, *model.AppError)
 
 	// GetTeamMember returns a specific membership.
+	//
+	// Minimum server version: 5.2
 	GetTeamMember(teamId, userId string) (*model.TeamMember, *model.AppError)
 
+	// GetTeamMembersForUser returns all team memberships for a user.
+	//
+	// Minimum server version: 5.10
+	GetTeamMembersForUser(userId string, page int, perPage int) ([]*model.TeamMember, *model.AppError)
+
 	// UpdateTeamMemberRoles updates the role for a team membership.
+	//
+	// Minimum server version: 5.2
 	UpdateTeamMemberRoles(teamId, userId, newRoles string) (*model.TeamMember, *model.AppError)
 
 	// CreateChannel creates a channel.
+	//
+	// Minimum server version: 5.2
 	CreateChannel(channel *model.Channel) (*model.Channel, *model.AppError)
 
 	// DeleteChannel deletes a channel.
+	//
+	// Minimum server version: 5.2
 	DeleteChannel(channelId string) *model.AppError
 
 	// GetPublicChannelsForTeam gets a list of all channels.
-	GetPublicChannelsForTeam(teamId string, offset, limit int) (*model.ChannelList, *model.AppError)
+	//
+	// Minimum server version: 5.2
+	GetPublicChannelsForTeam(teamId string, page, perPage int) ([]*model.Channel, *model.AppError)
 
 	// GetChannel gets a channel.
+	//
+	// Minimum server version: 5.2
 	GetChannel(channelId string) (*model.Channel, *model.AppError)
 
 	// GetChannelByName gets a channel by its name, given a team id.
+	//
+	// Minimum server version: 5.2
 	GetChannelByName(teamId, name string, includeDeleted bool) (*model.Channel, *model.AppError)
 
 	// GetChannelByNameForTeamName gets a channel by its name, given a team name.
+	//
+	// Minimum server version: 5.2
 	GetChannelByNameForTeamName(teamName, channelName string, includeDeleted bool) (*model.Channel, *model.AppError)
 
 	// GetChannelsForTeamForUser gets a list of channels for given user ID in given team ID.
 	//
 	// Minimum server version: 5.6
-	GetChannelsForTeamForUser(teamId, userId string, includeDeleted bool) (*model.ChannelList, *model.AppError)
+	GetChannelsForTeamForUser(teamId, userId string, includeDeleted bool) ([]*model.Channel, *model.AppError)
 
 	// GetChannelStats gets statistics for a channel.
 	//
@@ -166,23 +305,52 @@ type API interface {
 	GetChannelStats(channelId string) (*model.ChannelStats, *model.AppError)
 
 	// GetDirectChannel gets a direct message channel.
+	// If the channel does not exist it will create it.
+	//
+	// Minimum server version: 5.2
 	GetDirectChannel(userId1, userId2 string) (*model.Channel, *model.AppError)
 
 	// GetGroupChannel gets a group message channel.
+	// If the channel does not exist it will create it.
+	//
+	// Minimum server version: 5.2
 	GetGroupChannel(userIds []string) (*model.Channel, *model.AppError)
 
 	// UpdateChannel updates a channel.
+	//
+	// Minimum server version: 5.2
 	UpdateChannel(channel *model.Channel) (*model.Channel, *model.AppError)
 
 	// SearchChannels returns the channels on a team matching the provided search term.
 	//
 	// Minimum server version: 5.6
-	SearchChannels(teamId string, term string) (*model.ChannelList, *model.AppError)
+	SearchChannels(teamId string, term string) ([]*model.Channel, *model.AppError)
 
-	// AddChannelMember creates a channel membership for a user.
+	// SearchUsers returns a list of users based on some search criteria.
+	//
+	// Minimum server version: 5.6
+	SearchUsers(search *model.UserSearch) ([]*model.User, *model.AppError)
+
+	// SearchPostsInTeam returns a list of posts in a specific team that match the given params.
+	//
+	// Minimum server version: 5.10
+	SearchPostsInTeam(teamId string, paramsList []*model.SearchParams) ([]*model.Post, *model.AppError)
+
+	// AddChannelMember joins a user to a channel (as if they joined themselves)
+	// This means the user will not receive notifications for joining the channel.
+	//
+	// Minimum server version: 5.2
 	AddChannelMember(channelId, userId string) (*model.ChannelMember, *model.AppError)
 
+	// AddUserToChannel adds a user to a channel as if the specified user had invited them.
+	// This means the user will receive the regular notifications for being added to the channel.
+	//
+	// Minimum server version: 5.18
+	AddUserToChannel(channelId, userId, asUserId string) (*model.ChannelMember, *model.AppError)
+
 	// GetChannelMember gets a channel membership for a user.
+	//
+	// Minimum server version: 5.2
 	GetChannelMember(channelId, userId string) (*model.ChannelMember, *model.AppError)
 
 	// GetChannelMembers gets a channel membership for all users.
@@ -195,16 +363,44 @@ type API interface {
 	// Minimum server version: 5.6
 	GetChannelMembersByIds(channelId string, userIds []string) (*model.ChannelMembers, *model.AppError)
 
+	// GetChannelMembersForUser returns all channel memberships on a team for a user.
+	//
+	// Minimum server version: 5.10
+	GetChannelMembersForUser(teamId, userId string, page, perPage int) ([]*model.ChannelMember, *model.AppError)
+
 	// UpdateChannelMemberRoles updates a user's roles for a channel.
+	//
+	// Minimum server version: 5.2
 	UpdateChannelMemberRoles(channelId, userId, newRoles string) (*model.ChannelMember, *model.AppError)
 
 	// UpdateChannelMemberNotifications updates a user's notification properties for a channel.
+	//
+	// Minimum server version: 5.2
 	UpdateChannelMemberNotifications(channelId, userId string, notifications map[string]string) (*model.ChannelMember, *model.AppError)
 
+	// GetGroup gets a group by ID.
+	//
+	// Minimum server version: 5.18
+	GetGroup(groupId string) (*model.Group, *model.AppError)
+
+	// GetGroupByName gets a group by name.
+	//
+	// Minimum server version: 5.18
+	GetGroupByName(name string) (*model.Group, *model.AppError)
+
+	// GetGroupsForUser gets the groups a user is in.
+	//
+	// Minimum server version: 5.18
+	GetGroupsForUser(userId string) ([]*model.Group, *model.AppError)
+
 	// DeleteChannelMember deletes a channel membership for a user.
+	//
+	// Minimum server version: 5.2
 	DeleteChannelMember(channelId, userId string) *model.AppError
 
 	// CreatePost creates a post.
+	//
+	// Minimum server version: 5.2
 	CreatePost(post *model.Post) (*model.Post, *model.AppError)
 
 	// AddReaction add a reaction to a post.
@@ -223,9 +419,25 @@ type API interface {
 	GetReactions(postId string) ([]*model.Reaction, *model.AppError)
 
 	// SendEphemeralPost creates an ephemeral post.
+	//
+	// Minimum server version: 5.2
 	SendEphemeralPost(userId string, post *model.Post) *model.Post
 
+	// UpdateEphemeralPost updates an ephemeral message previously sent to the user.
+	// EXPERIMENTAL: This API is experimental and can be changed without advance notice.
+	//
+	// Minimum server version: 5.2
+	UpdateEphemeralPost(userId string, post *model.Post) *model.Post
+
+	// DeleteEphemeralPost deletes an ephemeral message previously sent to the user.
+	// EXPERIMENTAL: This API is experimental and can be changed without advance notice.
+	//
+	// Minimum server version: 5.2
+	DeleteEphemeralPost(userId, postId string)
+
 	// DeletePost deletes a post.
+	//
+	// Minimum server version: 5.2
 	DeletePost(postId string) *model.AppError
 
 	// GetPostThread gets a post with all the other posts in the same thread.
@@ -234,6 +446,8 @@ type API interface {
 	GetPostThread(postId string) (*model.PostList, *model.AppError)
 
 	// GetPost gets a post.
+	//
+	// Minimum server version: 5.2
 	GetPost(postId string) (*model.Post, *model.AppError)
 
 	// GetPostsSince gets posts created after a specified time as Unix time in milliseconds.
@@ -256,13 +470,25 @@ type API interface {
 	// Minimum server version: 5.6
 	GetPostsForChannel(channelId string, page, perPage int) (*model.PostList, *model.AppError)
 
+	// GetTeamStats gets a team's statistics
+	//
+	// Minimum server version: 5.8
+	GetTeamStats(teamId string) (*model.TeamStats, *model.AppError)
+
 	// UpdatePost updates a post.
+	//
+	// Minimum server version: 5.2
 	UpdatePost(post *model.Post) (*model.Post, *model.AppError)
 
 	// GetProfileImage gets user's profile image.
 	//
 	// Minimum server version: 5.6
 	GetProfileImage(userId string) ([]byte, *model.AppError)
+
+	// SetProfileImage sets a user's profile image.
+	//
+	// Minimum server version: 5.6
+	SetProfileImage(userId string, data []byte) *model.AppError
 
 	// GetEmojiList returns a page of custom emoji on the system.
 	//
@@ -287,12 +513,19 @@ type API interface {
 	// The duplicate FileInfo objects are not initially linked to a post, but may now be passed
 	// to CreatePost. Use this API to duplicate a post and its file attachments without
 	// actually duplicating the uploaded files.
+	//
+	// Minimum server version: 5.2
 	CopyFileInfos(userId string, fileIds []string) ([]string, *model.AppError)
 
 	// GetFileInfo gets a File Info for a specific fileId
 	//
 	// Minimum server version: 5.3
 	GetFileInfo(fileId string) (*model.FileInfo, *model.AppError)
+
+	// GetFile gets content of a file by it's ID
+	//
+	// Minimum server version: 5.8
+	GetFile(fileId string) ([]byte, *model.AppError)
 
 	// GetFileLink gets the public link to a file by fileId.
 	//
@@ -313,6 +546,13 @@ type API interface {
 	//
 	// Minimum server version: 5.6
 	UploadFile(data []byte, channelId string, filename string) (*model.FileInfo, *model.AppError)
+
+	// OpenInteractiveDialog will open an interactive dialog on a user's client that
+	// generated the trigger ID. Used with interactive message buttons, menus
+	// and slash commands.
+	//
+	// Minimum server version: 5.6
+	OpenInteractiveDialog(dialog model.OpenDialogRequest) *model.AppError
 
 	// Plugin Section
 
@@ -341,36 +581,68 @@ type API interface {
 	// Minimum server version: 5.6
 	GetPluginStatus(id string) (*model.PluginStatus, *model.AppError)
 
+	// InstallPlugin will upload another plugin with tar.gz file.
+	// Previous version will be replaced on replace true.
+	//
+	// Minimum server version: 5.18
+	InstallPlugin(file io.Reader, replace bool) (*model.Manifest, *model.AppError)
+
 	// KV Store Section
 
-	// KVSet will store a key-value pair, unique per plugin.
+	// KVSet stores a key-value pair, unique per plugin.
+	// Provided helper functions and internal plugin code will use the prefix `mmi_` before keys. Do not use this prefix.
+	//
+	// Minimum server version: 5.2
 	KVSet(key string, value []byte) *model.AppError
 
-	// KVSet will store a key-value pair, unique per plugin with an expiry time
+	// KVCompareAndSet updates a key-value pair, unique per plugin, but only if the current value matches the given oldValue.
+	// Inserts a new key if oldValue == nil.
+	// Returns (false, err) if DB error occurred
+	// Returns (false, nil) if current value != oldValue or key already exists when inserting
+	// Returns (true, nil) if current value == oldValue or new key is inserted
+	//
+	// Minimum server version: 5.12
+	KVCompareAndSet(key string, oldValue, newValue []byte) (bool, *model.AppError)
+
+	// KVCompareAndDelete deletes a key-value pair, unique per plugin, but only if the current value matches the given oldValue.
+	// Returns (false, err) if DB error occurred
+	// Returns (false, nil) if current value != oldValue or key does not exist when deleting
+	// Returns (true, nil) if current value == oldValue and the key was deleted
+	//
+	// Minimum server version: 5.16
+	KVCompareAndDelete(key string, oldValue []byte) (bool, *model.AppError)
+
+	// KVSet stores a key-value pair with an expiry time, unique per plugin.
 	//
 	// Minimum server version: 5.6
 	KVSetWithExpiry(key string, value []byte, expireInSeconds int64) *model.AppError
 
-	// KVGet will retrieve a value based on the key. Returns nil for non-existent keys.
+	// KVGet retrieves a value based on the key, unique per plugin. Returns nil for non-existent keys.
+	//
+	// Minimum server version: 5.2
 	KVGet(key string) ([]byte, *model.AppError)
 
-	// KVDelete will remove a key-value pair. Returns nil for non-existent keys.
+	// KVDelete removes a key-value pair, unique per plugin. Returns nil for non-existent keys.
+	//
+	// Minimum server version: 5.2
 	KVDelete(key string) *model.AppError
 
-	// KVDeleteAll will remove all key-value pairs for a plugin.
+	// KVDeleteAll removes all key-value pairs for a plugin.
 	//
 	// Minimum server version: 5.6
 	KVDeleteAll() *model.AppError
 
-	// KVList will list all keys for a plugin.
+	// KVList lists all keys for a plugin.
 	//
 	// Minimum server version: 5.6
 	KVList(page, perPage int) ([]string, *model.AppError)
 
 	// PublishWebSocketEvent sends an event to WebSocket connections.
-	// event is the type and will be prepended with "custom_<pluginid>_"
-	// payload is the data sent with the event. Interface values must be primitive Go types or mattermost-server/model types
-	// broadcast determines to which users to send the event
+	// event is the type and will be prepended with "custom_<pluginid>_".
+	// payload is the data sent with the event. Interface values must be primitive Go types or mattermost-server/model types.
+	// broadcast determines to which users to send the event.
+	//
+	// Minimum server version: 5.2
 	PublishWebSocketEvent(event string, payload map[string]interface{}, broadcast *model.WebsocketBroadcast)
 
 	// HasPermissionTo check if the user has the permission at system scope.
@@ -392,25 +664,84 @@ type API interface {
 	// Appropriate context such as the plugin name will already be added as fields so plugins
 	// do not need to add that info.
 	// keyValuePairs should be primitive go types or other values that can be encoded by encoding/gob
+	//
+	// Minimum server version: 5.2
 	LogDebug(msg string, keyValuePairs ...interface{})
 
 	// LogInfo writes a log message to the Mattermost server log file.
 	// Appropriate context such as the plugin name will already be added as fields so plugins
 	// do not need to add that info.
 	// keyValuePairs should be primitive go types or other values that can be encoded by encoding/gob
+	//
+	// Minimum server version: 5.2
 	LogInfo(msg string, keyValuePairs ...interface{})
 
 	// LogError writes a log message to the Mattermost server log file.
 	// Appropriate context such as the plugin name will already be added as fields so plugins
 	// do not need to add that info.
 	// keyValuePairs should be primitive go types or other values that can be encoded by encoding/gob
+	//
+	// Minimum server version: 5.2
 	LogError(msg string, keyValuePairs ...interface{})
 
 	// LogWarn writes a log message to the Mattermost server log file.
 	// Appropriate context such as the plugin name will already be added as fields so plugins
 	// do not need to add that info.
 	// keyValuePairs should be primitive go types or other values that can be encoded by encoding/gob
+	//
+	// Minimum server version: 5.2
 	LogWarn(msg string, keyValuePairs ...interface{})
+
+	// SendMail sends an email to a specific address
+	//
+	// Minimum server version: 5.7
+	SendMail(to, subject, htmlBody string) *model.AppError
+
+	// CreateBot creates the given bot and corresponding user.
+	//
+	// Minimum server version: 5.10
+	CreateBot(bot *model.Bot) (*model.Bot, *model.AppError)
+
+	// PatchBot applies the given patch to the bot and corresponding user.
+	//
+	// Minimum server version: 5.10
+	PatchBot(botUserId string, botPatch *model.BotPatch) (*model.Bot, *model.AppError)
+
+	// GetBot returns the given bot.
+	//
+	// Minimum server version: 5.10
+	GetBot(botUserId string, includeDeleted bool) (*model.Bot, *model.AppError)
+
+	// GetBots returns the requested page of bots.
+	//
+	// Minimum server version: 5.10
+	GetBots(options *model.BotGetOptions) ([]*model.Bot, *model.AppError)
+
+	// UpdateBotActive marks a bot as active or inactive, along with its corresponding user.
+	//
+	// Minimum server version: 5.10
+	UpdateBotActive(botUserId string, active bool) (*model.Bot, *model.AppError)
+
+	// PermanentDeleteBot permanently deletes a bot and its corresponding user.
+	//
+	// Minimum server version: 5.10
+	PermanentDeleteBot(botUserId string) *model.AppError
+
+	// GetBotIconImage gets LHS bot icon image.
+	//
+	// Minimum server version: 5.14
+	GetBotIconImage(botUserId string) ([]byte, *model.AppError)
+
+	// SetBotIconImage sets LHS bot icon image.
+	// Icon image must be SVG format, all other formats are rejected.
+	//
+	// Minimum server version: 5.14
+	SetBotIconImage(botUserId string, data []byte) *model.AppError
+
+	// DeleteBotIconImage deletes LHS bot icon image.
+	//
+	// Minimum server version: 5.14
+	DeleteBotIconImage(botUserId string) *model.AppError
 }
 
 var handshake = plugin.HandshakeConfig{

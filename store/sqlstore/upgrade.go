@@ -4,17 +4,32 @@
 package sqlstore
 
 import (
+	"database/sql"
 	"encoding/json"
-	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/blang/semver"
+	"github.com/pkg/errors"
+
 	"github.com/mattermost/mattermost-server/mlog"
 	"github.com/mattermost/mattermost-server/model"
+	"github.com/mattermost/mattermost-server/services/timezones"
 )
 
 const (
+	CURRENT_SCHEMA_VERSION   = VERSION_5_16_0
+	VERSION_5_16_0           = "5.16.0"
+	VERSION_5_15_0           = "5.15.0"
+	VERSION_5_14_0           = "5.14.0"
+	VERSION_5_13_0           = "5.13.0"
+	VERSION_5_12_0           = "5.12.0"
+	VERSION_5_11_0           = "5.11.0"
+	VERSION_5_10_0           = "5.10.0"
+	VERSION_5_9_0            = "5.9.0"
+	VERSION_5_8_0            = "5.8.0"
+	VERSION_5_7_0            = "5.7.0"
 	VERSION_5_6_0            = "5.6.0"
 	VERSION_5_5_0            = "5.5.0"
 	VERSION_5_4_0            = "5.4.0"
@@ -51,14 +66,63 @@ const (
 )
 
 const (
-	EXIT_VERSION_SAVE_MISSING = 1001
-	EXIT_TOO_OLD              = 1002
-	EXIT_VERSION_SAVE         = 1003
-	EXIT_THEME_MIGRATION      = 1004
+	EXIT_VERSION_SAVE                   = 1003
+	EXIT_THEME_MIGRATION                = 1004
+	EXIT_TEAM_INVITEID_MIGRATION_FAILED = 1006
 )
 
-func UpgradeDatabase(sqlStore SqlStore) {
+// UpgradeDatabase attempts to migrate the schema to the latest supported version.
+// The value of model.CurrentVersion is accepted as a parameter for unit testing, but it is not
+// used to stop migrations at that version.
+func UpgradeDatabase(sqlStore SqlStore, currentModelVersionString string) error {
+	currentModelVersion, err := semver.Parse(currentModelVersionString)
+	if err != nil {
+		return errors.Wrapf(err, "failed to parse current model version %s", currentModelVersionString)
+	}
 
+	nextUnsupportedMajorVersion := semver.Version{
+		Major: currentModelVersion.Major + 1,
+	}
+
+	oldestSupportedVersion, err := semver.Parse(OLDEST_SUPPORTED_VERSION)
+	if err != nil {
+		return errors.Wrapf(err, "failed to parse oldest supported version %s", OLDEST_SUPPORTED_VERSION)
+	}
+
+	var currentSchemaVersion *semver.Version
+	currentSchemaVersionString := sqlStore.GetCurrentSchemaVersion()
+	if currentSchemaVersionString != "" {
+		currentSchemaVersion, err = semver.New(currentSchemaVersionString)
+		if err != nil {
+			return errors.Wrapf(err, "failed to parse database schema version %s", currentSchemaVersionString)
+		}
+	}
+
+	// Assume a fresh database if no schema version has been recorded.
+	if currentSchemaVersion == nil {
+		if err := sqlStore.System().SaveOrUpdate(&model.System{Name: "Version", Value: currentModelVersion.String()}); err != nil {
+			return errors.Wrap(err, "failed to initialize schema version for fresh database")
+		}
+
+		currentSchemaVersion = &currentModelVersion
+		mlog.Info("The database schema version has been set", mlog.String("version", currentSchemaVersion.String()))
+		return nil
+	}
+
+	// Upgrades prior to the oldest supported version are not supported.
+	if currentSchemaVersion.LT(oldestSupportedVersion) {
+		return errors.Errorf("Database schema version %s is no longer supported. This Mattermost server supports automatic upgrades from schema version %s through schema version %s. Please manually upgrade to at least version %s before continuing.", *currentSchemaVersion, oldestSupportedVersion, currentModelVersion, oldestSupportedVersion)
+	}
+
+	// Allow forwards compatibility only within the same major version.
+	if currentSchemaVersion.GTE(nextUnsupportedMajorVersion) {
+		return errors.Errorf("Database schema version %s is not supported. This Mattermost server supports only >=%s, <%s. Please upgrade to at least version %s before continuing.", *currentSchemaVersion, currentModelVersion, nextUnsupportedMajorVersion, nextUnsupportedMajorVersion)
+	} else if currentSchemaVersion.GT(currentModelVersion) {
+		mlog.Warn("The database schema version and model versions do not match", mlog.String("schema_version", currentSchemaVersion.String()), mlog.String("model_version", currentModelVersion.String()))
+	}
+
+	// Otherwise, apply any necessary migrations. Note that these methods currently invoke
+	// os.Exit instead of returning an error.
 	UpgradeDatabaseToVersion31(sqlStore)
 	UpgradeDatabaseToVersion32(sqlStore)
 	UpgradeDatabaseToVersion33(sqlStore)
@@ -90,41 +154,33 @@ func UpgradeDatabase(sqlStore SqlStore) {
 	UpgradeDatabaseToVersion54(sqlStore)
 	UpgradeDatabaseToVersion55(sqlStore)
 	UpgradeDatabaseToVersion56(sqlStore)
+	UpgradeDatabaseToVersion57(sqlStore)
+	UpgradeDatabaseToVersion58(sqlStore)
+	UpgradeDatabaseToVersion59(sqlStore)
+	UpgradeDatabaseToVersion510(sqlStore)
+	UpgradeDatabaseToVersion511(sqlStore)
+	UpgradeDatabaseToVersion512(sqlStore)
+	UpgradeDatabaseToVersion513(sqlStore)
+	UpgradeDatabaseToVersion514(sqlStore)
+	UpgradeDatabaseToVersion515(sqlStore)
+	UpgradeDatabaseToVersion516(sqlStore)
 
-	// If the SchemaVersion is empty this this is the first time it has ran
-	// so lets set it to the current version.
-	if sqlStore.GetCurrentSchemaVersion() == "" {
-		if result := <-sqlStore.System().SaveOrUpdate(&model.System{Name: "Version", Value: model.CurrentVersion}); result.Err != nil {
-			mlog.Critical(result.Err.Error())
-			time.Sleep(time.Second)
-			os.Exit(EXIT_VERSION_SAVE_MISSING)
-		}
-
-		mlog.Info(fmt.Sprintf("The database schema has been set to version %v", model.CurrentVersion))
-	}
-
-	// If we're not on the current version then it's too old to be upgraded
-	if sqlStore.GetCurrentSchemaVersion() != model.CurrentVersion {
-		mlog.Critical(fmt.Sprintf("Database schema version %v is no longer supported. This Mattermost server supports automatic upgrades from schema version %v through schema version %v. Downgrades are not supported. Please manually upgrade to at least version %v before continuing", sqlStore.GetCurrentSchemaVersion(), OLDEST_SUPPORTED_VERSION, model.CurrentVersion, OLDEST_SUPPORTED_VERSION))
-		time.Sleep(time.Second)
-		os.Exit(EXIT_TOO_OLD)
-	}
+	return nil
 }
 
 func saveSchemaVersion(sqlStore SqlStore, version string) {
-	if result := <-sqlStore.System().Update(&model.System{Name: "Version", Value: version}); result.Err != nil {
-		mlog.Critical(result.Err.Error())
+	if err := sqlStore.System().SaveOrUpdate(&model.System{Name: "Version", Value: version}); err != nil {
+		mlog.Critical(err.Error())
 		time.Sleep(time.Second)
 		os.Exit(EXIT_VERSION_SAVE)
 	}
 
-	mlog.Warn(fmt.Sprintf("The database schema has been upgraded to version %v", version))
+	mlog.Warn("The database schema version has been upgraded", mlog.String("version", version))
 }
 
 func shouldPerformUpgrade(sqlStore SqlStore, currentSchemaVersion string, expectedSchemaVersion string) bool {
 	if sqlStore.GetCurrentSchemaVersion() == currentSchemaVersion {
-		mlog.Warn(fmt.Sprintf("The database schema version of %v appears to be out of date", currentSchemaVersion))
-		mlog.Warn(fmt.Sprintf("Attempting to upgrade the database schema version to %v", expectedSchemaVersion))
+		mlog.Warn("Attempting to upgrade the database schema version", mlog.String("current_version", currentSchemaVersion), mlog.String("new_version", expectedSchemaVersion))
 
 		return true
 	}
@@ -148,7 +204,7 @@ func UpgradeDatabaseToVersion32(sqlStore SqlStore) {
 }
 
 func themeMigrationFailed(err error) {
-	mlog.Critical(fmt.Sprintf("Failed to migrate User.ThemeProps to Preferences table %v", err))
+	mlog.Critical("Failed to migrate User.ThemeProps to Preferences table", mlog.Err(err))
 	time.Sleep(time.Second)
 	os.Exit(EXIT_THEME_MIGRATION)
 }
@@ -165,15 +221,18 @@ func UpgradeDatabaseToVersion33(sqlStore SqlStore) {
 			if err != nil {
 				themeMigrationFailed(err)
 			}
+			defer finalizeTransaction(transaction)
 
 			// increase size of Value column of Preferences table to match the size of the ThemeProps column
 			if sqlStore.DriverName() == model.DATABASE_DRIVER_POSTGRES {
 				if _, err := transaction.Exec("ALTER TABLE Preferences ALTER COLUMN Value TYPE varchar(2000)"); err != nil {
 					themeMigrationFailed(err)
+					return
 				}
 			} else if sqlStore.DriverName() == model.DATABASE_DRIVER_MYSQL {
 				if _, err := transaction.Exec("ALTER TABLE Preferences MODIFY Value text"); err != nil {
 					themeMigrationFailed(err)
+					return
 				}
 			}
 
@@ -188,15 +247,18 @@ func UpgradeDatabaseToVersion33(sqlStore SqlStore) {
 				WHERE
 					Users.ThemeProps != 'null'`, params); err != nil {
 				themeMigrationFailed(err)
+				return
 			}
 
 			// delete old data
 			if _, err := transaction.Exec("ALTER TABLE Users DROP COLUMN ThemeProps"); err != nil {
 				themeMigrationFailed(err)
+				return
 			}
 
 			if err := transaction.Commit(); err != nil {
 				themeMigrationFailed(err)
+				return
 			}
 
 			// rename solarized_* code themes to solarized-* to match client changes in 3.0
@@ -413,10 +475,10 @@ func UpgradeDatabaseToVersion49(sqlStore SqlStore) {
 
 	if shouldPerformUpgrade(sqlStore, VERSION_4_8_1, VERSION_4_9_0) {
 		sqlStore.CreateColumnIfNotExists("Teams", "LastTeamIconUpdate", "bigint", "bigint", "0")
-		defaultTimezone := model.DefaultUserTimezone()
+		defaultTimezone := timezones.DefaultUserTimezone()
 		defaultTimezoneValue, err := json.Marshal(defaultTimezone)
 		if err != nil {
-			mlog.Critical(fmt.Sprint(err))
+			mlog.Critical(err.Error())
 		}
 		sqlStore.CreateColumnIfNotExists("Users", "Timezone", "varchar(256)", "varchar(256)", string(defaultTimezoneValue))
 		sqlStore.RemoveIndexIfExists("idx_channels_displayname", "Channels")
@@ -515,20 +577,175 @@ func UpgradeDatabaseToVersion55(sqlStore SqlStore) {
 }
 
 func UpgradeDatabaseToVersion56(sqlStore SqlStore) {
-	// TODO: Uncomment following condition when version 5.6.0 is released
-	//if shouldPerformUpgrade(sqlStore, VERSION_5_5_0, VERSION_5_6_0) {
-	sqlStore.CreateColumnIfNotExists("PluginKeyValueStore", "ExpireAt", "bigint(20)", "bigint", "0")
+	if shouldPerformUpgrade(sqlStore, VERSION_5_5_0, VERSION_5_6_0) {
+		sqlStore.CreateColumnIfNotExists("PluginKeyValueStore", "ExpireAt", "bigint(20)", "bigint", "0")
 
-	// migrating user's accepted terms of service data into the new table
-	sqlStore.GetMaster().Exec("INSERT INTO UserTermsOfService SELECT Id, AcceptedTermsOfServiceId as TermsOfServiceId, :CreateAt FROM Users WHERE AcceptedTermsOfServiceId != \"\" AND AcceptedTermsOfServiceId IS NOT NULL", map[string]interface{}{"CreateAt": model.GetMillis()})
+		// migrating user's accepted terms of service data into the new table
+		sqlStore.GetMaster().Exec("INSERT INTO UserTermsOfService SELECT Id, AcceptedTermsOfServiceId as TermsOfServiceId, :CreateAt FROM Users WHERE AcceptedTermsOfServiceId != \"\" AND AcceptedTermsOfServiceId IS NOT NULL", map[string]interface{}{"CreateAt": model.GetMillis()})
 
-	if sqlStore.DriverName() == model.DATABASE_DRIVER_POSTGRES {
-		sqlStore.RemoveIndexIfExists("idx_users_email_lower", "lower(Email)")
-		sqlStore.RemoveIndexIfExists("idx_users_username_lower", "lower(Username)")
-		sqlStore.RemoveIndexIfExists("idx_users_nickname_lower", "lower(Nickname)")
-		sqlStore.RemoveIndexIfExists("idx_users_firstname_lower", "lower(FirstName)")
-		sqlStore.RemoveIndexIfExists("idx_users_lastname_lower", "lower(LastName)")
+		if sqlStore.DriverName() == model.DATABASE_DRIVER_POSTGRES {
+			sqlStore.RemoveIndexIfExists("idx_users_email_lower", "lower(Email)")
+			sqlStore.RemoveIndexIfExists("idx_users_username_lower", "lower(Username)")
+			sqlStore.RemoveIndexIfExists("idx_users_nickname_lower", "lower(Nickname)")
+			sqlStore.RemoveIndexIfExists("idx_users_firstname_lower", "lower(FirstName)")
+			sqlStore.RemoveIndexIfExists("idx_users_lastname_lower", "lower(LastName)")
+		}
+
+		saveSchemaVersion(sqlStore, VERSION_5_6_0)
 	}
-	//saveSchemaVersion(sqlStore, VERSION_5_6_0)
-	//}
+
+}
+
+func UpgradeDatabaseToVersion57(sqlStore SqlStore) {
+	if shouldPerformUpgrade(sqlStore, VERSION_5_6_0, VERSION_5_7_0) {
+		saveSchemaVersion(sqlStore, VERSION_5_7_0)
+	}
+}
+
+func getRole(sqlStore SqlStore, name string) (*model.Role, error) {
+	var dbRole Role
+
+	if err := sqlStore.GetReplica().SelectOne(&dbRole, "SELECT * from Roles WHERE Name = :Name", map[string]interface{}{"Name": name}); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, errors.Wrapf(err, "failed to find role %s", name)
+		} else {
+			return nil, errors.Wrapf(err, "failed to query role %s", name)
+		}
+	}
+
+	return dbRole.ToModel(), nil
+}
+
+func saveRole(sqlStore SqlStore, role *model.Role) error {
+	dbRole := NewRoleFromModel(role)
+
+	dbRole.UpdateAt = model.GetMillis()
+	if rowsChanged, err := sqlStore.GetMaster().Update(dbRole); err != nil {
+		return errors.Wrap(err, "failed to update role")
+	} else if rowsChanged != 1 {
+		return errors.New("found no role to update")
+	}
+
+	return nil
+}
+
+func UpgradeDatabaseToVersion58(sqlStore SqlStore) {
+	if shouldPerformUpgrade(sqlStore, VERSION_5_7_0, VERSION_5_8_0) {
+		// idx_channels_txt was removed in `UpgradeDatabaseToVersion50`, but merged as part of
+		// v5.1, so the migration wouldn't apply to anyone upgrading from v5.0. Remove it again to
+		// bring the upgraded (from v5.0) and fresh install schemas back in sync.
+		sqlStore.RemoveIndexIfExists("idx_channels_txt", "Channels")
+
+		// Fix column types and defaults where gorp converged on a different schema value than the
+		// original migration.
+		sqlStore.AlterColumnTypeIfExists("OutgoingWebhooks", "Description", "text", "VARCHAR(500)")
+		sqlStore.AlterColumnTypeIfExists("IncomingWebhooks", "Description", "text", "VARCHAR(500)")
+		sqlStore.AlterColumnTypeIfExists("OutgoingWebhooks", "IconURL", "text", "VARCHAR(1024)")
+		sqlStore.AlterColumnDefaultIfExists("OutgoingWebhooks", "Username", model.NewString("NULL"), model.NewString(""))
+		sqlStore.AlterColumnDefaultIfExists("OutgoingWebhooks", "IconURL", nil, model.NewString(""))
+		sqlStore.AlterColumnDefaultIfExists("PluginKeyValueStore", "ExpireAt", model.NewString("NULL"), model.NewString("NULL"))
+
+		saveSchemaVersion(sqlStore, VERSION_5_8_0)
+	}
+}
+
+func UpgradeDatabaseToVersion59(sqlStore SqlStore) {
+	if shouldPerformUpgrade(sqlStore, VERSION_5_8_0, VERSION_5_9_0) {
+		saveSchemaVersion(sqlStore, VERSION_5_9_0)
+	}
+}
+
+func UpgradeDatabaseToVersion510(sqlStore SqlStore) {
+	if shouldPerformUpgrade(sqlStore, VERSION_5_9_0, VERSION_5_10_0) {
+		sqlStore.CreateColumnIfNotExistsNoDefault("Channels", "GroupConstrained", "tinyint(4)", "boolean")
+		sqlStore.CreateColumnIfNotExistsNoDefault("Teams", "GroupConstrained", "tinyint(4)", "boolean")
+
+		sqlStore.CreateIndexIfNotExists("idx_groupteams_teamid", "GroupTeams", "TeamId")
+		sqlStore.CreateIndexIfNotExists("idx_groupchannels_channelid", "GroupChannels", "ChannelId")
+
+		saveSchemaVersion(sqlStore, VERSION_5_10_0)
+	}
+}
+
+func UpgradeDatabaseToVersion511(sqlStore SqlStore) {
+	if shouldPerformUpgrade(sqlStore, VERSION_5_10_0, VERSION_5_11_0) {
+		// Enforce all teams have an InviteID set
+		var teams []*model.Team
+		if _, err := sqlStore.GetReplica().Select(&teams, "SELECT * FROM Teams WHERE InviteId = ''"); err != nil {
+			mlog.Error("Error fetching Teams without InviteID", mlog.Err(err))
+		} else {
+			for _, team := range teams {
+				team.InviteId = model.NewId()
+				if _, err := sqlStore.Team().Update(team); err != nil {
+					mlog.Error("Error updating Team InviteIDs", mlog.String("team_id", team.Id), mlog.Err(err))
+				}
+			}
+		}
+
+		saveSchemaVersion(sqlStore, VERSION_5_11_0)
+	}
+}
+
+func UpgradeDatabaseToVersion512(sqlStore SqlStore) {
+	if shouldPerformUpgrade(sqlStore, VERSION_5_11_0, VERSION_5_12_0) {
+		sqlStore.CreateColumnIfNotExistsNoDefault("TeamMembers", "SchemeGuest", "boolean", "boolean")
+		sqlStore.CreateColumnIfNotExistsNoDefault("ChannelMembers", "SchemeGuest", "boolean", "boolean")
+		sqlStore.CreateColumnIfNotExistsNoDefault("Schemes", "DefaultTeamGuestRole", "text", "VARCHAR(64)")
+		sqlStore.CreateColumnIfNotExistsNoDefault("Schemes", "DefaultChannelGuestRole", "text", "VARCHAR(64)")
+
+		sqlStore.GetMaster().Exec("UPDATE Schemes SET DefaultTeamGuestRole = '', DefaultChannelGuestRole = ''")
+
+		// Saturday, January 24, 2065 5:20:00 AM GMT. To remove all personal access token sessions.
+		sqlStore.GetMaster().Exec("DELETE FROM Sessions WHERE ExpiresAt > 3000000000000")
+
+		saveSchemaVersion(sqlStore, VERSION_5_12_0)
+	}
+}
+
+func UpgradeDatabaseToVersion513(sqlStore SqlStore) {
+	if shouldPerformUpgrade(sqlStore, VERSION_5_12_0, VERSION_5_13_0) {
+		// The previous jobs ran once per minute, cluttering the Jobs table with somewhat useless entries. Clean that up.
+		sqlStore.GetMaster().Exec("DELETE FROM Jobs WHERE Type = 'plugins'")
+
+		saveSchemaVersion(sqlStore, VERSION_5_13_0)
+	}
+}
+
+func UpgradeDatabaseToVersion514(sqlStore SqlStore) {
+	if shouldPerformUpgrade(sqlStore, VERSION_5_13_0, VERSION_5_14_0) {
+		saveSchemaVersion(sqlStore, VERSION_5_14_0)
+	}
+}
+
+func UpgradeDatabaseToVersion515(sqlStore SqlStore) {
+	if shouldPerformUpgrade(sqlStore, VERSION_5_14_0, VERSION_5_15_0) {
+		saveSchemaVersion(sqlStore, VERSION_5_15_0)
+	}
+}
+
+func UpgradeDatabaseToVersion516(sqlStore SqlStore) {
+	if shouldPerformUpgrade(sqlStore, VERSION_5_15_0, VERSION_5_16_0) {
+		if sqlStore.DriverName() == model.DATABASE_DRIVER_POSTGRES {
+			sqlStore.GetMaster().Exec("ALTER TABLE Tokens ALTER COLUMN Extra TYPE varchar(2048)")
+		} else if sqlStore.DriverName() == model.DATABASE_DRIVER_MYSQL {
+			sqlStore.GetMaster().Exec("ALTER TABLE Tokens MODIFY Extra text")
+		}
+		saveSchemaVersion(sqlStore, VERSION_5_16_0)
+
+		// Fix mismatches between the canonical and migrated schemas.
+		sqlStore.AlterColumnTypeIfExists("TeamMembers", "SchemeGuest", "tinyint(4)", "boolean")
+		sqlStore.AlterColumnTypeIfExists("Schemes", "DefaultTeamGuestRole", "varchar(64)", "VARCHAR(64)")
+		sqlStore.AlterColumnTypeIfExists("Schemes", "DefaultChannelGuestRole", "varchar(64)", "VARCHAR(64)")
+		sqlStore.AlterColumnTypeIfExists("Teams", "AllowedDomains", "text", "VARCHAR(1000)")
+		sqlStore.AlterColumnTypeIfExists("Channels", "GroupConstrained", "tinyint(1)", "boolean")
+		sqlStore.AlterColumnTypeIfExists("Teams", "GroupConstrained", "tinyint(1)", "boolean")
+
+		// One known mismatch remains: ChannelMembers.SchemeGuest. The requisite migration
+		// is left here for posterity, but we're avoiding fix this given the corresponding
+		// table rewrite in most MySQL and Postgres instances.
+		// sqlStore.AlterColumnTypeIfExists("ChannelMembers", "SchemeGuest", "tinyint(4)", "boolean")
+
+		sqlStore.CreateIndexIfNotExists("idx_groupteams_teamid", "GroupTeams", "TeamId")
+		sqlStore.CreateIndexIfNotExists("idx_groupchannels_channelid", "GroupChannels", "ChannelId")
+	}
 }

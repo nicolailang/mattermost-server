@@ -4,7 +4,6 @@
 package web
 
 import (
-	"fmt"
 	"mime"
 	"net/http"
 	"path"
@@ -16,29 +15,36 @@ import (
 	"github.com/mattermost/mattermost-server/mlog"
 	"github.com/mattermost/mattermost-server/model"
 	"github.com/mattermost/mattermost-server/utils"
+	"github.com/mattermost/mattermost-server/utils/fileutils"
 )
 
+var robotsTxt = []byte("User-agent: *\nDisallow: /\n")
+
 func (w *Web) InitStatic() {
-	if *w.App.Config().ServiceSettings.WebserverMode != "disabled" {
-		utils.UpdateAssetsSubpathFromConfig(w.App.Config())
+	if *w.ConfigService.Config().ServiceSettings.WebserverMode != "disabled" {
+		if err := utils.UpdateAssetsSubpathFromConfig(w.ConfigService.Config()); err != nil {
+			mlog.Error("Failed to update assets subpath from config", mlog.Err(err))
+		}
 
-		staticDir, _ := utils.FindDir(model.CLIENT_DIR)
-		mlog.Debug(fmt.Sprintf("Using client directory at %v", staticDir))
+		staticDir, _ := fileutils.FindDir(model.CLIENT_DIR)
+		mlog.Debug("Using client directory", mlog.String("clientDir", staticDir))
 
-		subpath, _ := utils.GetSubpathFromConfig(w.App.Config())
+		subpath, _ := utils.GetSubpathFromConfig(w.ConfigService.Config())
 
 		mime.AddExtensionType(".wasm", "application/wasm")
 
 		staticHandler := staticFilesHandler(http.StripPrefix(path.Join(subpath, "static"), http.FileServer(http.Dir(staticDir))))
-		pluginHandler := staticFilesHandler(http.StripPrefix(path.Join(subpath, "static", "plugins"), http.FileServer(http.Dir(*w.App.Config().PluginSettings.ClientDirectory))))
+		pluginHandler := staticFilesHandler(http.StripPrefix(path.Join(subpath, "static", "plugins"), http.FileServer(http.Dir(*w.ConfigService.Config().PluginSettings.ClientDirectory))))
 
-		if *w.App.Config().ServiceSettings.WebserverMode == "gzip" {
+		if *w.ConfigService.Config().ServiceSettings.WebserverMode == "gzip" {
 			staticHandler = gziphandler.GzipHandler(staticHandler)
 			pluginHandler = gziphandler.GzipHandler(pluginHandler)
 		}
 
 		w.MainRouter.PathPrefix("/static/plugins/").Handler(pluginHandler)
 		w.MainRouter.PathPrefix("/static/").Handler(staticHandler)
+		w.MainRouter.Handle("/robots.txt", http.HandlerFunc(robotsHandler))
+		w.MainRouter.Handle("/unsupported_browser.js", http.HandlerFunc(unsupportedBrowserScriptHandler))
 		w.MainRouter.Handle("/{anything:.*}", w.NewStaticHandler(root)).Methods("GET")
 
 		// When a subpath is defined, it's necessary to handle redirects without a
@@ -54,11 +60,7 @@ func (w *Web) InitStatic() {
 func root(c *Context, w http.ResponseWriter, r *http.Request) {
 
 	if !CheckClientCompatability(r.UserAgent()) {
-		w.Header().Set("Cache-Control", "no-store")
-		page := utils.NewHTMLTemplate(c.App.HTMLTemplates(), "unsupported_browser")
-		page.Props["Title"] = c.T("web.error.unsupported_browser.title")
-		page.Props["Message"] = c.T("web.error.unsupported_browser.message")
-		page.RenderToWriter(w)
+		renderUnsuppportedBrowser(c.App, w, r)
 		return
 	}
 
@@ -69,7 +71,7 @@ func root(c *Context, w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Cache-Control", "no-cache, max-age=31556926, public")
 
-	staticDir, _ := utils.FindDir(model.CLIENT_DIR)
+	staticDir, _ := fileutils.FindDir(model.CLIENT_DIR)
 	http.ServeFile(w, r, filepath.Join(staticDir, "root.html"))
 }
 
@@ -82,4 +84,22 @@ func staticFilesHandler(handler http.Handler) http.Handler {
 		}
 		handler.ServeHTTP(w, r)
 	})
+}
+
+func robotsHandler(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	w.Write(robotsTxt)
+}
+
+func unsupportedBrowserScriptHandler(w http.ResponseWriter, r *http.Request) {
+	if strings.HasSuffix(r.URL.Path, "/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	templatesDir, _ := fileutils.FindDir("templates")
+	http.ServeFile(w, r, filepath.Join(templatesDir, "unsupported_browser.js"))
 }

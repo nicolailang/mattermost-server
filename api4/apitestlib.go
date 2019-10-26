@@ -4,38 +4,35 @@
 package api4
 
 import (
-	"bytes"
 	"fmt"
-	"io"
+	"github.com/stretchr/testify/require"
 	"io/ioutil"
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/mattermost/mattermost-server/app"
+	"github.com/mattermost/mattermost-server/config"
 	"github.com/mattermost/mattermost-server/mlog"
 	"github.com/mattermost/mattermost-server/model"
 	"github.com/mattermost/mattermost-server/store"
-	"github.com/mattermost/mattermost-server/store/sqlstore"
-	"github.com/mattermost/mattermost-server/store/storetest"
 	"github.com/mattermost/mattermost-server/utils"
 	"github.com/mattermost/mattermost-server/web"
 	"github.com/mattermost/mattermost-server/wsapi"
 
-	s3 "github.com/minio/minio-go"
-	"github.com/minio/minio-go/pkg/credentials"
+	s3 "github.com/minio/minio-go/v6"
+	"github.com/minio/minio-go/v6/pkg/credentials"
 )
 
 type TestHelper struct {
-	App            *app.App
-	tempConfigPath string
+	App         *app.App
+	Server      *app.Server
+	ConfigStore config.Store
 
 	Client              *model.Client4
 	BasicUser           *model.User
@@ -47,92 +44,82 @@ type TestHelper struct {
 	BasicDeletedChannel *model.Channel
 	BasicChannel2       *model.Channel
 	BasicPost           *model.Post
+	Group               *model.Group
 
 	SystemAdminClient *model.Client4
 	SystemAdminUser   *model.User
 	tempWorkspace     string
 }
 
-type persistentTestStore struct {
-	store.Store
-}
+// testStore tracks the active test store.
+// This is a bridge between the new testlib ownership of the test store and the existing usage
+// of the api4 test helper by many packages. In the future, this test helper would ideally belong
+// to the testlib altogether.
+var testStore store.Store
 
-func (*persistentTestStore) Close() {}
-
-var testStoreContainer *storetest.RunningContainer
-var testStore *persistentTestStore
-
-// UseTestStore sets the container and corresponding settings to use for tests. Once the tests are
-// complete (e.g. at the end of your TestMain implementation), you should call StopTestStore.
-func UseTestStore(container *storetest.RunningContainer, settings *model.SqlSettings) {
-	testStoreContainer = container
-	testStore = &persistentTestStore{store.NewLayeredStore(sqlstore.NewSqlSupplier(*settings, nil), nil, nil)}
-}
-
-func StopTestStore() {
-	if testStoreContainer != nil {
-		testStoreContainer.Stop()
-		testStoreContainer = nil
-	}
+func UseTestStore(store store.Store) {
+	testStore = store
 }
 
 func setupTestHelper(enterprise bool, updateConfig func(*model.Config)) *TestHelper {
-	permConfig, err := os.Open(utils.FindConfigFile("config.json"))
+	testStore.DropAllTables()
+
+	memoryStore, err := config.NewMemoryStoreWithOptions(&config.MemoryStoreOptions{IgnoreEnvironmentOverrides: true})
 	if err != nil {
-		panic(err)
-	}
-	defer permConfig.Close()
-	tempConfig, err := ioutil.TempFile("", "")
-	if err != nil {
-		panic(err)
-	}
-	_, err = io.Copy(tempConfig, permConfig)
-	tempConfig.Close()
-	if err != nil {
-		panic(err)
+		panic("failed to initialize memory store: " + err.Error())
 	}
 
-	options := []app.Option{app.ConfigFile(tempConfig.Name()), app.DisableConfigWatch}
-	if testStore != nil {
-		options = append(options, app.StoreOverride(testStore))
-	}
+	var options []app.Option
+	options = append(options, app.ConfigStore(memoryStore))
+	options = append(options, app.StoreOverride(testStore))
 
-	a, err := app.New(options...)
+	s, err := app.NewServer(options...)
 	if err != nil {
 		panic(err)
 	}
 
 	th := &TestHelper{
-		App:            a,
-		tempConfigPath: tempConfig.Name(),
+		App:         s.FakeApp(),
+		Server:      s,
+		ConfigStore: memoryStore,
 	}
 
 	th.App.UpdateConfig(func(cfg *model.Config) {
 		*cfg.TeamSettings.MaxUsersPerTeam = 50
 		*cfg.RateLimitSettings.Enable = false
-		cfg.EmailSettings.SendEmailNotifications = true
+		*cfg.EmailSettings.SendEmailNotifications = true
+
+		// Disable sniffing, otherwise elastic client fails to connect to docker node
+		// More details: https://github.com/olivere/elastic/wiki/Sniffing
+		*cfg.ElasticsearchSettings.Sniff = false
 	})
 	prevListenAddress := *th.App.Config().ServiceSettings.ListenAddress
-	if testStore != nil {
-		th.App.UpdateConfig(func(cfg *model.Config) { *cfg.ServiceSettings.ListenAddress = ":0" })
-	}
+	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.ServiceSettings.ListenAddress = ":0" })
 	if updateConfig != nil {
 		th.App.UpdateConfig(updateConfig)
 	}
-	serverErr := th.App.StartServer()
+	serverErr := th.Server.Start()
 	if serverErr != nil {
 		panic(serverErr)
 	}
 
 	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.ServiceSettings.ListenAddress = prevListenAddress })
-	Init(th.App, th.App.Srv.Router)
-	web.NewWeb(th.App, th.App.Srv.Router)
+	Init(th.Server, th.Server.AppOptions, th.App.Srv.Router)
+	web.New(th.Server, th.Server.AppOptions, th.App.Srv.Router)
 	wsapi.Init(th.App, th.App.Srv.WebSocketRouter)
 	th.App.Srv.Store.MarkSystemRanUnitTests()
-	th.App.DoAdvancedPermissionsMigration()
-	th.App.DoEmojisPermissionsMigration()
+	th.App.DoAppMigrations()
 
 	th.App.UpdateConfig(func(cfg *model.Config) { *cfg.TeamSettings.EnableOpenServer = true })
+
+	// Disable strict password requirements for test
+	th.App.UpdateConfig(func(cfg *model.Config) {
+		*cfg.PasswordSettings.MinimumLength = 5
+		*cfg.PasswordSettings.Lowercase = false
+		*cfg.PasswordSettings.Uppercase = false
+		*cfg.PasswordSettings.Symbol = false
+		*cfg.PasswordSettings.Number = false
+	})
 
 	if enterprise {
 		th.App.SetLicense(model.NewTestLicense())
@@ -151,16 +138,6 @@ func setupTestHelper(enterprise bool, updateConfig func(*model.Config)) *TestHel
 		th.tempWorkspace = dir
 	}
 
-	pluginDir := filepath.Join(th.tempWorkspace, "plugins")
-	webappDir := filepath.Join(th.tempWorkspace, "webapp")
-
-	th.App.UpdateConfig(func(cfg *model.Config) {
-		*cfg.PluginSettings.Directory = pluginDir
-		*cfg.PluginSettings.ClientDirectory = webappDir
-	})
-
-	th.App.InitPlugins(pluginDir, webappDir)
-
 	return th
 }
 
@@ -176,71 +153,30 @@ func SetupConfig(updateConfig func(cfg *model.Config)) *TestHelper {
 	return setupTestHelper(false, updateConfig)
 }
 
+func (me *TestHelper) ShutdownApp() {
+	done := make(chan bool)
+	go func() {
+		me.Server.Shutdown()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		// panic instead of t.Fatal to terminate all tests in this package, otherwise the
+		// still running App could spuriously fail subsequent tests.
+		panic("failed to shutdown App within 30 seconds")
+	}
+}
+
 func (me *TestHelper) TearDown() {
 	utils.DisableDebugLogForTest()
 
-	var wg sync.WaitGroup
-	wg.Add(3)
-
-	go func() {
-		defer wg.Done()
-		options := &model.UserSearchOptions{
-			AllowEmails:    false,
-			AllowFullNames: false,
-			Limit:          model.USER_SEARCH_MAX_LIMIT,
-		}
-		if result := <-me.App.Srv.Store.User().Search("", "fakeuser", options); result.Err != nil {
-			mlog.Error("Error tearing down test users")
-		} else {
-			users := result.Data.([]*model.User)
-
-			for _, u := range users {
-				if err := me.App.PermanentDeleteUser(u); err != nil {
-					mlog.Error(err.Error())
-				}
-			}
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		if result := <-me.App.Srv.Store.Team().SearchByName("faketeam"); result.Err != nil {
-			mlog.Error("Error tearing down test teams")
-		} else {
-			teams := result.Data.([]*model.Team)
-
-			for _, t := range teams {
-				if err := me.App.PermanentDeleteTeam(t); err != nil {
-					mlog.Error(err.Error())
-				}
-			}
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		if result := <-me.App.Srv.Store.OAuth().GetApps(0, 1000); result.Err != nil {
-			mlog.Error("Error tearing down test oauth apps")
-		} else {
-			apps := result.Data.([]*model.OAuthApp)
-
-			for _, a := range apps {
-				if strings.HasPrefix(a.Name, "fakeoauthapp") {
-					<-me.App.Srv.Store.OAuth().DeleteApp(a.Id)
-				}
-			}
-		}
-	}()
-
-	wg.Wait()
-
-	me.App.Shutdown()
-	os.Remove(me.tempConfigPath)
+	me.ShutdownApp()
 
 	utils.EnableDebugLogForTest()
 
 	if err := recover(); err != nil {
-		StopTestStore()
 		panic(err)
 	}
 }
@@ -248,9 +184,14 @@ func (me *TestHelper) TearDown() {
 func (me *TestHelper) InitBasic() *TestHelper {
 	me.waitForConnectivity()
 
+	me.SystemAdminUser = me.CreateUser()
+	me.App.UpdateUserRoles(me.SystemAdminUser.Id, model.SYSTEM_USER_ROLE_ID+" "+model.SYSTEM_ADMIN_ROLE_ID, false)
+	me.LoginSystemAdmin()
+
 	me.TeamAdminUser = me.CreateUser()
 	me.App.UpdateUserRoles(me.TeamAdminUser.Id, model.SYSTEM_USER_ROLE_ID, false)
 	me.LoginTeamAdmin()
+
 	me.BasicTeam = me.CreateTeam()
 	me.BasicChannel = me.CreatePublicChannel()
 	me.BasicPrivateChannel = me.CreatePrivateChannel()
@@ -272,16 +213,7 @@ func (me *TestHelper) InitBasic() *TestHelper {
 	me.App.UpdateUserRoles(me.BasicUser.Id, model.SYSTEM_USER_ROLE_ID, false)
 	me.Client.DeleteChannel(me.BasicDeletedChannel.Id)
 	me.LoginBasic()
-
-	return me
-}
-
-func (me *TestHelper) InitSystemAdmin() *TestHelper {
-	me.waitForConnectivity()
-
-	me.SystemAdminUser = me.CreateUser()
-	me.App.UpdateUserRoles(me.SystemAdminUser.Id, model.SYSTEM_USER_ROLE_ID+" "+model.SYSTEM_ADMIN_ROLE_ID, false)
-	me.LoginSystemAdmin()
+	me.Group = me.CreateGroup()
 
 	return me
 }
@@ -328,7 +260,10 @@ func (me *TestHelper) CreateTeamWithClient(client *model.Client4) *model.Team {
 	}
 
 	utils.DisableDebugLogForTest()
-	rteam, _ := client.CreateTeam(team)
+	rteam, resp := client.CreateTeam(team)
+	if resp.Error != nil {
+		panic(resp.Error)
+	}
 	utils.EnableDebugLogForTest()
 	return rteam
 }
@@ -342,7 +277,7 @@ func (me *TestHelper) CreateUserWithClient(client *model.Client4) *model.User {
 		Nickname:  "nn_" + id,
 		FirstName: "f_" + id,
 		LastName:  "l_" + id,
-		Password:  "Password1",
+		Password:  "Pa$$word11",
 	}
 
 	utils.DisableDebugLogForTest()
@@ -351,8 +286,11 @@ func (me *TestHelper) CreateUserWithClient(client *model.Client4) *model.User {
 		panic(response.Error)
 	}
 
-	ruser.Password = "Password1"
-	store.Must(me.App.Srv.Store.User().VerifyEmail(ruser.Id))
+	ruser.Password = "Pa$$word11"
+	_, err := me.App.Srv.Store.User().VerifyEmail(ruser.Id, ruser.Email)
+	if err != nil {
+		return nil
+	}
 	utils.EnableDebugLogForTest()
 	return ruser
 }
@@ -380,7 +318,10 @@ func (me *TestHelper) CreateChannelWithClientAndTeam(client *model.Client4, chan
 	}
 
 	utils.DisableDebugLogForTest()
-	rchannel, _ := client.CreateChannel(channel)
+	rchannel, resp := client.CreateChannel(channel)
+	if resp.Error != nil {
+		panic(resp.Error)
+	}
 	utils.EnableDebugLogForTest()
 	return rchannel
 }
@@ -448,12 +389,16 @@ func (me *TestHelper) CreateMessagePostWithClient(client *model.Client4, channel
 }
 
 func (me *TestHelper) CreateMessagePostNoClient(channel *model.Channel, message string, createAtTime int64) *model.Post {
-	post := store.Must(me.App.Srv.Store.Post().Save(&model.Post{
+	post, err := me.App.Srv.Store.Post().Save(&model.Post{
 		UserId:    me.BasicUser.Id,
 		ChannelId: channel.Id,
 		Message:   message,
 		CreateAt:  createAtTime,
-	})).(*model.Post)
+	})
+
+	if err != nil {
+		panic(err)
+	}
 
 	return post
 }
@@ -462,7 +407,7 @@ func (me *TestHelper) CreateDmChannel(user *model.User) *model.Channel {
 	utils.DisableDebugLogForTest()
 	var err *model.AppError
 	var channel *model.Channel
-	if channel, err = me.App.CreateDirectChannel(me.BasicUser.Id, user.Id); err != nil {
+	if channel, err = me.App.GetOrCreateDirectChannel(me.BasicUser.Id, user.Id); err != nil {
 		mlog.Error(err.Error())
 
 		time.Sleep(time.Second)
@@ -490,25 +435,37 @@ func (me *TestHelper) LoginSystemAdmin() {
 
 func (me *TestHelper) LoginBasicWithClient(client *model.Client4) {
 	utils.DisableDebugLogForTest()
-	client.Login(me.BasicUser.Email, me.BasicUser.Password)
+	_, resp := client.Login(me.BasicUser.Email, me.BasicUser.Password)
+	if resp.Error != nil {
+		panic(resp.Error)
+	}
 	utils.EnableDebugLogForTest()
 }
 
 func (me *TestHelper) LoginBasic2WithClient(client *model.Client4) {
 	utils.DisableDebugLogForTest()
-	client.Login(me.BasicUser2.Email, me.BasicUser2.Password)
+	_, resp := client.Login(me.BasicUser2.Email, me.BasicUser2.Password)
+	if resp.Error != nil {
+		panic(resp.Error)
+	}
 	utils.EnableDebugLogForTest()
 }
 
 func (me *TestHelper) LoginTeamAdminWithClient(client *model.Client4) {
 	utils.DisableDebugLogForTest()
-	client.Login(me.TeamAdminUser.Email, me.TeamAdminUser.Password)
+	_, resp := client.Login(me.TeamAdminUser.Email, me.TeamAdminUser.Password)
+	if resp.Error != nil {
+		panic(resp.Error)
+	}
 	utils.EnableDebugLogForTest()
 }
 
 func (me *TestHelper) LoginSystemAdminWithClient(client *model.Client4) {
 	utils.DisableDebugLogForTest()
-	client.Login(me.SystemAdminUser.Email, me.SystemAdminUser.Password)
+	_, resp := client.Login(me.SystemAdminUser.Email, me.SystemAdminUser.Password)
+	if resp.Error != nil {
+		panic(resp.Error)
+	}
 	utils.EnableDebugLogForTest()
 }
 
@@ -557,10 +514,28 @@ func (me *TestHelper) AddUserToChannel(user *model.User, channel *model.Channel)
 }
 
 func (me *TestHelper) GenerateTestEmail() string {
-	if me.App.Config().EmailSettings.SMTPServer != "dockerhost" && os.Getenv("CI_INBUCKET_PORT") == "" {
+	if *me.App.Config().EmailSettings.SMTPServer != "localhost" && os.Getenv("CI_INBUCKET_PORT") == "" {
 		return strings.ToLower("success+" + model.NewId() + "@simulator.amazonses.com")
 	}
-	return strings.ToLower(model.NewId() + "@dockerhost")
+	return strings.ToLower(model.NewId() + "@localhost")
+}
+
+func (me *TestHelper) CreateGroup() *model.Group {
+	id := model.NewId()
+	group := &model.Group{
+		Name:        "n-" + id,
+		DisplayName: "dn_" + id,
+		Source:      model.GroupSourceLdap,
+		RemoteId:    "ri_" + id,
+	}
+
+	utils.DisableDebugLogForTest()
+	group, err := me.App.CreateGroup(group)
+	if err != nil {
+		panic(err)
+	}
+	utils.EnableDebugLogForTest()
+	return group
 }
 
 func GenerateTestUsername() string {
@@ -617,103 +592,71 @@ func CheckNoError(t *testing.T, resp *model.Response) {
 	t.Helper()
 
 	if resp.Error != nil {
-		t.Fatal("Expected no error, got " + resp.Error.Error())
+		t.Fatalf("Expected no error, got %q", resp.Error.Error())
 	}
 }
 
-func CheckCreatedStatus(t *testing.T, resp *model.Response) {
+func checkHTTPStatus(t *testing.T, resp *model.Response, expectedStatus int, expectError bool) {
 	t.Helper()
 
-	if resp.StatusCode != http.StatusCreated {
-		t.Log("actual: " + strconv.Itoa(resp.StatusCode))
-		t.Log("expected: " + strconv.Itoa(http.StatusCreated))
-		t.Fatal("wrong status code")
-	}
-}
+	switch {
+	case resp == nil:
+		t.Fatalf("Unexpected nil response, expected http:%v, expectError:%v)", expectedStatus, expectError)
 
-func CheckForbiddenStatus(t *testing.T, resp *model.Response) {
-	t.Helper()
+	case expectError && resp.Error == nil:
+		t.Fatalf("Expected a non-nil error and http status:%v, got nil, %v", expectedStatus, resp.StatusCode)
 
-	if resp.Error == nil {
-		t.Fatal("should have errored with status:" + strconv.Itoa(http.StatusForbidden))
-		return
-	}
+	case !expectError && resp.Error != nil:
+		t.Fatalf("Expected no error and http status:%v, got %q, http:%v", expectedStatus, resp.Error, resp.StatusCode)
 
-	if resp.StatusCode != http.StatusForbidden {
-		t.Log("actual: " + strconv.Itoa(resp.StatusCode))
-		t.Log("expected: " + strconv.Itoa(http.StatusForbidden))
-		t.Fatal("wrong status code")
-	}
-}
-
-func CheckUnauthorizedStatus(t *testing.T, resp *model.Response) {
-	t.Helper()
-
-	if resp.Error == nil {
-		t.Fatal("should have errored with status:" + strconv.Itoa(http.StatusUnauthorized))
-		return
-	}
-
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Log("actual: " + strconv.Itoa(resp.StatusCode))
-		t.Log("expected: " + strconv.Itoa(http.StatusUnauthorized))
-		t.Fatal("wrong status code")
-	}
-}
-
-func CheckNotFoundStatus(t *testing.T, resp *model.Response) {
-	t.Helper()
-
-	if resp.Error == nil {
-		t.Fatal("should have errored with status:" + strconv.Itoa(http.StatusNotFound))
-		return
-	}
-
-	if resp.StatusCode != http.StatusNotFound {
-		t.Log("actual: " + strconv.Itoa(resp.StatusCode))
-		t.Log("expected: " + strconv.Itoa(http.StatusNotFound))
-		t.Fatal("wrong status code")
-	}
-}
-
-func CheckBadRequestStatus(t *testing.T, resp *model.Response) {
-	t.Helper()
-
-	if resp.Error == nil {
-		t.Fatal("should have errored with status:" + strconv.Itoa(http.StatusBadRequest))
-		return
-	}
-
-	if resp.StatusCode != http.StatusBadRequest {
-		t.Log("actual: " + strconv.Itoa(resp.StatusCode))
-		t.Log("expected: " + strconv.Itoa(http.StatusBadRequest))
-		t.Fatal("wrong status code")
-	}
-}
-
-func CheckNotImplementedStatus(t *testing.T, resp *model.Response) {
-	t.Helper()
-
-	if resp.Error == nil {
-		t.Fatal("should have errored with status:" + strconv.Itoa(http.StatusNotImplemented))
-		return
-	}
-
-	if resp.StatusCode != http.StatusNotImplemented {
-		t.Log("actual: " + strconv.Itoa(resp.StatusCode))
-		t.Log("expected: " + strconv.Itoa(http.StatusNotImplemented))
-		t.Fatal("wrong status code")
+	case resp.StatusCode != expectedStatus:
+		t.Fatalf("Expected http status:%v, got %v (err: %q)", expectedStatus, resp.StatusCode, resp.Error)
 	}
 }
 
 func CheckOKStatus(t *testing.T, resp *model.Response) {
 	t.Helper()
+	checkHTTPStatus(t, resp, http.StatusOK, false)
+}
 
-	CheckNoError(t, resp)
+func CheckCreatedStatus(t *testing.T, resp *model.Response) {
+	t.Helper()
+	checkHTTPStatus(t, resp, http.StatusCreated, false)
+}
 
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("wrong status code. expected %d got %d", http.StatusOK, resp.StatusCode)
-	}
+func CheckForbiddenStatus(t *testing.T, resp *model.Response) {
+	t.Helper()
+	checkHTTPStatus(t, resp, http.StatusForbidden, true)
+}
+
+func CheckUnauthorizedStatus(t *testing.T, resp *model.Response) {
+	t.Helper()
+	checkHTTPStatus(t, resp, http.StatusUnauthorized, true)
+}
+
+func CheckNotFoundStatus(t *testing.T, resp *model.Response) {
+	t.Helper()
+	checkHTTPStatus(t, resp, http.StatusNotFound, true)
+}
+
+func CheckBadRequestStatus(t *testing.T, resp *model.Response) {
+	t.Helper()
+	checkHTTPStatus(t, resp, http.StatusBadRequest, true)
+}
+
+func CheckNotImplementedStatus(t *testing.T, resp *model.Response) {
+	t.Helper()
+	checkHTTPStatus(t, resp, http.StatusNotImplemented, true)
+}
+
+func CheckRequestEntityTooLargeStatus(t *testing.T, resp *model.Response) {
+	t.Helper()
+	checkHTTPStatus(t, resp, http.StatusRequestEntityTooLarge, true)
+}
+
+func CheckInternalErrorStatus(t *testing.T, resp *model.Response) {
+	t.Helper()
+	checkHTTPStatus(t, resp, http.StatusInternalServerError, true)
 }
 
 func CheckErrorMessage(t *testing.T, resp *model.Response, errorId string) {
@@ -731,35 +674,8 @@ func CheckErrorMessage(t *testing.T, resp *model.Response, errorId string) {
 	}
 }
 
-func CheckInternalErrorStatus(t *testing.T, resp *model.Response) {
-	t.Helper()
-
-	if resp.Error == nil {
-		t.Fatal("should have errored with status:" + strconv.Itoa(http.StatusInternalServerError))
-		return
-	}
-
-	if resp.StatusCode != http.StatusInternalServerError {
-		t.Log("actual: " + strconv.Itoa(resp.StatusCode))
-		t.Log("expected: " + strconv.Itoa(http.StatusInternalServerError))
-		t.Fatal("wrong status code")
-	}
-}
-
-func readTestFile(name string) ([]byte, error) {
-	path, _ := utils.FindDir("tests")
-	file, err := os.Open(filepath.Join(path, name))
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	data := &bytes.Buffer{}
-	if _, err := io.Copy(data, file); err != nil {
-		return nil, err
-	} else {
-		return data.Bytes(), nil
-	}
+func CheckStartsWith(t *testing.T, value, prefix, message string) {
+	require.True(t, strings.HasPrefix(value, prefix), message, value)
 }
 
 // Similar to s3.New() but allows initialization of signature v2 or signature v4 client.
@@ -780,17 +696,17 @@ func s3New(endpoint, accessKey, secretKey string, secure bool, signV2 bool, regi
 func (me *TestHelper) cleanupTestFile(info *model.FileInfo) error {
 	cfg := me.App.Config()
 	if *cfg.FileSettings.DriverName == model.IMAGE_DRIVER_S3 {
-		endpoint := cfg.FileSettings.AmazonS3Endpoint
-		accessKey := cfg.FileSettings.AmazonS3AccessKeyId
-		secretKey := cfg.FileSettings.AmazonS3SecretAccessKey
+		endpoint := *cfg.FileSettings.AmazonS3Endpoint
+		accessKey := *cfg.FileSettings.AmazonS3AccessKeyId
+		secretKey := *cfg.FileSettings.AmazonS3SecretAccessKey
 		secure := *cfg.FileSettings.AmazonS3SSL
 		signV2 := *cfg.FileSettings.AmazonS3SignV2
-		region := cfg.FileSettings.AmazonS3Region
+		region := *cfg.FileSettings.AmazonS3Region
 		s3Clnt, err := s3New(endpoint, accessKey, secretKey, secure, signV2, region)
 		if err != nil {
 			return err
 		}
-		bucket := cfg.FileSettings.AmazonS3Bucket
+		bucket := *cfg.FileSettings.AmazonS3Bucket
 		if err := s3Clnt.RemoveObject(bucket, info.Path); err != nil {
 			return err
 		}
@@ -807,18 +723,18 @@ func (me *TestHelper) cleanupTestFile(info *model.FileInfo) error {
 			}
 		}
 	} else if *cfg.FileSettings.DriverName == model.IMAGE_DRIVER_LOCAL {
-		if err := os.Remove(cfg.FileSettings.Directory + info.Path); err != nil {
+		if err := os.Remove(*cfg.FileSettings.Directory + info.Path); err != nil {
 			return err
 		}
 
 		if info.ThumbnailPath != "" {
-			if err := os.Remove(cfg.FileSettings.Directory + info.ThumbnailPath); err != nil {
+			if err := os.Remove(*cfg.FileSettings.Directory + info.ThumbnailPath); err != nil {
 				return err
 			}
 		}
 
 		if info.PreviewPath != "" {
-			if err := os.Remove(cfg.FileSettings.Directory + info.PreviewPath); err != nil {
+			if err := os.Remove(*cfg.FileSettings.Directory + info.PreviewPath); err != nil {
 				return err
 			}
 		}
@@ -830,16 +746,15 @@ func (me *TestHelper) cleanupTestFile(info *model.FileInfo) error {
 func (me *TestHelper) MakeUserChannelAdmin(user *model.User, channel *model.Channel) {
 	utils.DisableDebugLogForTest()
 
-	if cmr := <-me.App.Srv.Store.Channel().GetMember(channel.Id, user.Id); cmr.Err == nil {
-		cm := cmr.Data.(*model.ChannelMember)
+	if cm, err := me.App.Srv.Store.Channel().GetMember(channel.Id, user.Id); err == nil {
 		cm.SchemeAdmin = true
-		if sr := <-me.App.Srv.Store.Channel().UpdateMember(cm); sr.Err != nil {
+		if _, err = me.App.Srv.Store.Channel().UpdateMember(cm); err != nil {
 			utils.EnableDebugLogForTest()
-			panic(sr.Err)
+			panic(err)
 		}
 	} else {
 		utils.EnableDebugLogForTest()
-		panic(cmr.Err)
+		panic(err)
 	}
 
 	utils.EnableDebugLogForTest()
@@ -848,19 +763,18 @@ func (me *TestHelper) MakeUserChannelAdmin(user *model.User, channel *model.Chan
 func (me *TestHelper) UpdateUserToTeamAdmin(user *model.User, team *model.Team) {
 	utils.DisableDebugLogForTest()
 
-	if tmr := <-me.App.Srv.Store.Team().GetMember(team.Id, user.Id); tmr.Err == nil {
-		tm := tmr.Data.(*model.TeamMember)
+	if tm, err := me.App.Srv.Store.Team().GetMember(team.Id, user.Id); err == nil {
 		tm.SchemeAdmin = true
-		if sr := <-me.App.Srv.Store.Team().UpdateMember(tm); sr.Err != nil {
+		if _, err = me.App.Srv.Store.Team().UpdateMember(tm); err != nil {
 			utils.EnableDebugLogForTest()
-			panic(sr.Err)
+			panic(err)
 		}
 	} else {
 		utils.EnableDebugLogForTest()
-		mlog.Error(tmr.Err.Error())
+		mlog.Error(err.Error())
 
 		time.Sleep(time.Second)
-		panic(tmr.Err)
+		panic(err)
 	}
 
 	utils.EnableDebugLogForTest()
@@ -869,19 +783,18 @@ func (me *TestHelper) UpdateUserToTeamAdmin(user *model.User, team *model.Team) 
 func (me *TestHelper) UpdateUserToNonTeamAdmin(user *model.User, team *model.Team) {
 	utils.DisableDebugLogForTest()
 
-	if tmr := <-me.App.Srv.Store.Team().GetMember(team.Id, user.Id); tmr.Err == nil {
-		tm := tmr.Data.(*model.TeamMember)
+	if tm, err := me.App.Srv.Store.Team().GetMember(team.Id, user.Id); err == nil {
 		tm.SchemeAdmin = false
-		if sr := <-me.App.Srv.Store.Team().UpdateMember(tm); sr.Err != nil {
+		if _, err = me.App.Srv.Store.Team().UpdateMember(tm); err != nil {
 			utils.EnableDebugLogForTest()
-			panic(sr.Err)
+			panic(err)
 		}
 	} else {
 		utils.EnableDebugLogForTest()
-		mlog.Error(tmr.Err.Error())
+		mlog.Error(err.Error())
 
 		time.Sleep(time.Second)
-		panic(tmr.Err)
+		panic(err)
 	}
 
 	utils.EnableDebugLogForTest()

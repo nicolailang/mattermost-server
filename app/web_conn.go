@@ -5,13 +5,14 @@ package app
 
 import (
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
+	goi18n "github.com/mattermost/go-i18n/i18n"
 	"github.com/mattermost/mattermost-server/mlog"
 	"github.com/mattermost/mattermost-server/model"
-	goi18n "github.com/nicksnyder/go-i18n/i18n"
 )
 
 const (
@@ -39,6 +40,7 @@ type WebConn struct {
 	AllChannelMembers         map[string]string
 	LastAllChannelMembersTime int64
 	Sequence                  int64
+	closeOnce                 sync.Once
 	endWritePump              chan struct{}
 	pumpFinished              chan struct{}
 }
@@ -59,8 +61,8 @@ func (a *App) NewWebConn(ws *websocket.Conn, session model.Session, t goi18n.Tra
 		UserId:             session.UserId,
 		T:                  t,
 		Locale:             locale,
-		endWritePump:       make(chan struct{}, 2),
-		pumpFinished:       make(chan struct{}, 1),
+		endWritePump:       make(chan struct{}),
+		pumpFinished:       make(chan struct{}),
 	}
 
 	wc.SetSession(&session)
@@ -72,7 +74,9 @@ func (a *App) NewWebConn(ws *websocket.Conn, session model.Session, t goi18n.Tra
 
 func (wc *WebConn) Close() {
 	wc.WebSocket.Close()
-	wc.endWritePump <- struct{}{}
+	wc.closeOnce.Do(func() {
+		close(wc.endWritePump)
+	})
 	<-wc.pumpFinished
 }
 
@@ -105,16 +109,18 @@ func (c *WebConn) SetSession(v *model.Session) {
 }
 
 func (c *WebConn) Pump() {
-	ch := make(chan struct{}, 1)
+	ch := make(chan struct{})
 	go func() {
 		c.writePump()
-		ch <- struct{}{}
+		close(ch)
 	}()
 	c.readPump()
-	c.endWritePump <- struct{}{}
+	c.closeOnce.Do(func() {
+		close(c.endWritePump)
+	})
 	<-ch
 	c.App.HubUnregister(c)
-	c.pumpFinished <- struct{}{}
+	close(c.pumpFinished)
 }
 
 func (c *WebConn) readPump() {
@@ -138,9 +144,9 @@ func (c *WebConn) readPump() {
 		if err := c.WebSocket.ReadJSON(&req); err != nil {
 			// browsers will appear as CloseNoStatusReceived
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
-				mlog.Debug(fmt.Sprintf("websocket.read: client side closed socket userId=%v", c.UserId))
+				mlog.Debug("websocket.read: client side closed socket", mlog.String("user_id", c.UserId))
 			} else {
-				mlog.Debug(fmt.Sprintf("websocket.read: closing websocket for userId=%v error=%v", c.UserId, err.Error()))
+				mlog.Debug("websocket.read: closing websocket", mlog.String("user_id", c.UserId), mlog.Err(err))
 			}
 			return
 		}
@@ -175,7 +181,12 @@ func (c *WebConn) writePump() {
 				if msg.EventType() == model.WEBSOCKET_EVENT_TYPING ||
 					msg.EventType() == model.WEBSOCKET_EVENT_STATUS_CHANGE ||
 					msg.EventType() == model.WEBSOCKET_EVENT_CHANNEL_VIEWED {
-					mlog.Info(fmt.Sprintf("websocket.slow: dropping message userId=%v type=%v channelId=%v", c.UserId, msg.EventType(), evt.Broadcast.ChannelId))
+					mlog.Info(
+						"websocket.slow: dropping message",
+						mlog.String("user_id", c.UserId),
+						mlog.String("type", msg.EventType()),
+						mlog.String("channel_id", evt.Broadcast.ChannelId),
+					)
 					skipSend = true
 				}
 			}
@@ -194,9 +205,20 @@ func (c *WebConn) writePump() {
 
 				if len(c.Send) >= SEND_DEADLOCK_WARN {
 					if evtOk {
-						mlog.Error(fmt.Sprintf("websocket.full: message userId=%v type=%v channelId=%v size=%v", c.UserId, msg.EventType(), evt.Broadcast.ChannelId, len(msg.ToJson())))
+						mlog.Warn(
+							"websocket.full",
+							mlog.String("user_id", c.UserId),
+							mlog.String("type", msg.EventType()),
+							mlog.String("channel_id", evt.Broadcast.ChannelId),
+							mlog.Int("size", len(msg.ToJson())),
+						)
 					} else {
-						mlog.Error(fmt.Sprintf("websocket.full: message userId=%v type=%v size=%v", c.UserId, msg.EventType(), len(msg.ToJson())))
+						mlog.Warn(
+							"websocket.full",
+							mlog.String("user_id", c.UserId),
+							mlog.String("type", msg.EventType()),
+							mlog.Int("size", len(msg.ToJson())),
+						)
 					}
 				}
 
@@ -204,9 +226,9 @@ func (c *WebConn) writePump() {
 				if err := c.WebSocket.WriteMessage(websocket.TextMessage, msgBytes); err != nil {
 					// browsers will appear as CloseNoStatusReceived
 					if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
-						mlog.Debug(fmt.Sprintf("websocket.send: client side closed socket userId=%v", c.UserId))
+						mlog.Debug("websocket.send: client side closed socket", mlog.String("user_id", c.UserId))
 					} else {
-						mlog.Debug(fmt.Sprintf("websocket.send: closing websocket for userId=%v, error=%v", c.UserId, err.Error()))
+						mlog.Debug("websocket.send: closing websocket", mlog.String("user_id", c.UserId), mlog.Err(err))
 					}
 					return
 				}
@@ -223,9 +245,9 @@ func (c *WebConn) writePump() {
 			if err := c.WebSocket.WriteMessage(websocket.PingMessage, []byte{}); err != nil {
 				// browsers will appear as CloseNoStatusReceived
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
-					mlog.Debug(fmt.Sprintf("websocket.ticker: client side closed socket userId=%v", c.UserId))
+					mlog.Debug("websocket.ticker: client side closed socket", mlog.String("user_id", c.UserId))
 				} else {
-					mlog.Debug(fmt.Sprintf("websocket.ticker: closing websocket for userId=%v error=%v", c.UserId, err.Error()))
+					mlog.Debug("websocket.ticker: closing websocket", mlog.String("user_id", c.UserId), mlog.Err(err))
 				}
 				return
 			}
@@ -235,7 +257,7 @@ func (c *WebConn) writePump() {
 
 		case <-authTicker.C:
 			if c.GetSessionToken() == "" {
-				mlog.Debug(fmt.Sprintf("websocket.authTicker: did not authenticate ip=%v", c.WebSocket.RemoteAddr()))
+				mlog.Debug("websocket.authTicker: did not authenticate", mlog.Any("ip_address", c.WebSocket.RemoteAddr()))
 				return
 			}
 			authTicker.Stop()
@@ -259,7 +281,7 @@ func (webCon *WebConn) IsAuthenticated() bool {
 
 		session, err := webCon.App.GetSession(webCon.GetSessionToken())
 		if err != nil {
-			mlog.Error(fmt.Sprintf("Invalid session err=%v", err.Error()))
+			mlog.Error("Invalid session.", mlog.Err(err))
 			webCon.SetSessionToken("")
 			webCon.SetSession(nil)
 			webCon.SetSessionExpiresAt(0)
@@ -330,12 +352,12 @@ func (webCon *WebConn) ShouldSendEvent(msg *model.WebSocketEvent) bool {
 		}
 
 		if webCon.AllChannelMembers == nil {
-			result := <-webCon.App.Srv.Store.Channel().GetAllChannelMembersForUser(webCon.UserId, true, false)
-			if result.Err != nil {
-				mlog.Error("webhub.shouldSendEvent: " + result.Err.Error())
+			result, err := webCon.App.Srv.Store.Channel().GetAllChannelMembersForUser(webCon.UserId, true, false)
+			if err != nil {
+				mlog.Error("webhub.shouldSendEvent.", mlog.Err(err))
 				return false
 			}
-			webCon.AllChannelMembers = result.Data.(map[string]string)
+			webCon.AllChannelMembers = result
 			webCon.LastAllChannelMembersTime = model.GetMillis()
 		}
 
@@ -350,6 +372,15 @@ func (webCon *WebConn) ShouldSendEvent(msg *model.WebSocketEvent) bool {
 		return webCon.IsMemberOfTeam(msg.Broadcast.TeamId)
 	}
 
+	if msg.Event == model.WEBSOCKET_EVENT_USER_UPDATED && webCon.GetSession().Props[model.SESSION_PROP_IS_GUEST] == "true" {
+		canSee, err := webCon.App.UserCanSeeOtherUser(webCon.UserId, msg.Data["user"].(*model.User).Id)
+		if err != nil {
+			mlog.Error("webhub.shouldSendEvent.", mlog.Err(err))
+			return false
+		}
+		return canSee
+	}
+
 	return true
 }
 
@@ -359,7 +390,7 @@ func (webCon *WebConn) IsMemberOfTeam(teamId string) bool {
 	if currentSession == nil || len(currentSession.Token) == 0 {
 		session, err := webCon.App.GetSession(webCon.GetSessionToken())
 		if err != nil {
-			mlog.Error(fmt.Sprintf("Invalid session err=%v", err.Error()))
+			mlog.Error("Invalid session.", mlog.Err(err))
 			return false
 		}
 		webCon.SetSession(session)
